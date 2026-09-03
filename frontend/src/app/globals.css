@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #f5f3ee;
+  --paper-deep: #ebe7de;
+  --ink: #18231f;
+  --ink-soft: #2b3b35;
+  --muted: #6e7772;
+  --line: #dedbd2;
+  --accent: #d95f32;
+  --accent-strong: #be4721;
+  --accent-faint: #f9dfd2;
+  --success: #26715a;
+  --success-faint: #dcece5;
+  --warning: #9c6a17;
+  --warning-faint: #f4ead3;
+  --danger: #b23a31;
+  --danger-faint: #f5dedc;
+  --ring: #d95f32;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--paper); }
+body {
+  margin: 0;
+  background: radial-gradient(circle at 95% 0%, rgba(217, 95, 50, .08), transparent 26rem), var(--paper);
+  color: var(--ink);
+  font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", Arial, sans-serif;
+}
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
+::selection { background: var(--accent-faint); color: var(--ink); }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-rise { animation: rise .45s ease-out both; }
+.dot-grid {
+  background-image: radial-gradient(rgba(24, 35, 31, .12) .65px, transparent .65px);
+  background-size: 10px 10px;
+}
+.thin-scrollbar::-webkit-scrollbar { width: 5px; }
+.thin-scrollbar::-webkit-scrollbar-thumb { background: #cfcac0; border-radius: 999px; }
