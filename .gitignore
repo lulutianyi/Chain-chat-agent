@@ -18,3 +18,7 @@ backend/.pytest_cache/
 # Local review artifacts
 .docx-review/
 *.pyc
+# Microsoft Office temporary files
+~$*.docx
+~$*.xlsx
+~$*.pptx
