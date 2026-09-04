@@ -57,6 +57,8 @@ def evaluate_offer(rule: ProcurementRule, offer: SupplierOfferIn) -> tuple:
         max_moq=rule.max_moq,
         lead_days=offer.lead_days,
         max_lead_days=rule.max_lead_days,
+        payment_days=offer.payment_days,
+        max_payment_days=rule.max_payment_days,
         qualifications=offer.qualifications,
         required_qualifications=rule.required_qualifications,
     )
@@ -70,6 +72,8 @@ def evaluate_offer(rule: ProcurementRule, offer: SupplierOfferIn) -> tuple:
         region=offer.region,
         preferred_regions=rule.preferred_regions,
         cooperation_rating=offer.cooperation_rating,
+        payment_days=offer.payment_days,
+        max_payment_days=rule.max_payment_days,
     )
     classification, action = classify_supplier(hard_pass=hard.passed, score=scored.total, handoff_score=rule.handoff_score)
     return hard, scored, classification, action

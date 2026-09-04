@@ -15,6 +15,8 @@ def enforce_hard_rules(
     max_moq: int,
     lead_days: int,
     max_lead_days: int,
+    payment_days: int = 0,
+    max_payment_days: int = 0,
     qualifications: list[str],
     required_qualifications: list[str],
 ) -> RuleDecision:
@@ -26,6 +28,8 @@ def enforce_hard_rules(
         reasons.append(f"起订量 {moq} 超过上限 {max_moq}")
     if lead_days > max_lead_days:
         reasons.append(f"交付周期 {lead_days} 天超过上限 {max_lead_days} 天")
+    if payment_days > max_payment_days:
+        reasons.append(f"账期 {payment_days} 天超过上限 {max_payment_days} 天")
     missing = sorted(set(required_qualifications) - set(qualifications))
     if missing:
         reasons.append("缺少必备资质：" + "、".join(missing))
