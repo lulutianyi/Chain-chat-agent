@@ -10,22 +10,25 @@ SYSTEM_PROMPT = """
 """.strip()
 
 
-async def generate_negotiation_reply(*, supplier_message: str, decision_context: str) -> str:
+async def generate_negotiation_reply(*, supplier_message: str, decision_context: str, history: list[dict] | None = None) -> str:
     settings = get_settings()
     if not settings.deepseek_api_key:
         return "感谢补充信息。当前条件未达到我们的优质候选标准。请问报价或起订量是否还有调整空间？如可支持首单小批测款，也请一并说明。"
 
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": f"程序决策上下文：{decision_context}"},
+        *(history or []),
+        {"role": "user", "content": supplier_message},
+    ]
     payload = {
         "model": settings.deepseek_model,
         "temperature": 0.35,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "system", "content": f"程序决策上下文：{decision_context}"},
-            {"role": "user", "content": supplier_message},
-        ],
+        "messages": messages,
     }
     headers = {"Authorization": f"Bearer {settings.deepseek_api_key}"}
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(f"{settings.deepseek_base_url.rstrip('/')}/chat/completions", json=payload, headers=headers)
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"].strip()
+        choice = response.json()["choices"][0]["message"]
+        return (choice.get("content") or choice.get("reasoning_content") or "").strip()

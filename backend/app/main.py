@@ -255,6 +255,11 @@ def get_negotiation(negotiation_id: int, db: Session = Depends(get_db)):
 @app.post("/api/negotiations/{negotiation_id}/messages", response_model=ChatOut)
 async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Session = Depends(get_db)):
     negotiation = get_negotiation_or_404(db, negotiation_id)
+    history = [
+        {"role": "user" if m.sender == "supplier" else "assistant", "content": m.content}
+        for m in negotiation.messages
+        if m.sender in {"supplier", "ai"}
+    ]
     db.add(Message(negotiation_id=negotiation.id, sender="supplier", content=payload.content))
 
     # 人工接管或优质候选状态下，程序层硬性禁止 LLM 自动回复。
@@ -272,6 +277,7 @@ async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Sessio
     reply = await generate_negotiation_reply(
         supplier_message=payload.content,
         decision_context=f"继续 AI 议价；当前评分 {negotiation.score}；禁止做出下单或付款承诺。",
+        history=history,
     )
     db.add(Message(negotiation_id=negotiation.id, sender="ai", content=reply))
     db.commit()
