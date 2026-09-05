@@ -84,3 +84,13 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     negotiation: Mapped[Negotiation] = relationship(back_populates="messages")
+
+
+class SupplierAuth(Base):
+    __tablename__ = "supplier_auths"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    phone: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    access_token: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_login_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

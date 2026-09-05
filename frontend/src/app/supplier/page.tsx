@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowRight, Building2, Check, CheckCircle2, FileBadge2, LocateFixed, PackageOpen, ShieldCheck, Sparkles, UploadCloud, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { evaluateSupplierOffer, getProductCatalog, type ManagedProduct } from "@/lib/api";
+import { evaluateSupplierOffer, getProductCatalog, getSupplierPhone, getSupplierToken, type ManagedProduct } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 export default function SupplierPage() {
@@ -23,6 +24,17 @@ export default function SupplierPage() {
   const [qualifications, setQualifications] = useState<string[]>([]);
   const product = products.find((p) => p.id === productId);
   const isReady = Boolean(product && form.company.trim() && form.contact.trim() && form.phone.trim() && form.price && form.moq && form.region.trim() && form.leadTime && form.payment);
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!getSupplierToken()) {
+      const next = window.location.pathname + window.location.search;
+      router.replace(`/supplier/login?next=${encodeURIComponent(next)}`);
+      return;
+    }
+    const phone = getSupplierPhone();
+    if (phone) setForm((f) => ({ ...f, phone }));
+  }, [router]);
 
   useEffect(() => {
     getProductCatalog().then(items => { setProducts(items); setProductId(items[0]?.id ?? null); }).catch(() => setProducts([])).finally(() => setProductsLoading(false));
@@ -130,7 +142,7 @@ export default function SupplierPage() {
         <div className="space-y-5">
           <Card><CardContent className="p-5 sm:p-6"><div className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-xl bg-[var(--ink)] text-sm font-bold text-white">01</span><div><h2 className="font-bold">选择供货商品</h2><p className="mt-0.5 text-xs text-[var(--muted)]">来自采购方在工作台启用的商品库</p></div></div>{productsLoading ? <div className="mt-5 text-sm text-[var(--muted)]">正在读取商品库…</div> : products.length ? <div className="mt-5 grid gap-3 sm:grid-cols-3">{products.map((p) => <button type="button" key={p.id} onClick={() => setProductId(p.id)} className={cn("rounded-xl border p-4 text-left transition", p.id === productId ? "border-[var(--accent)] bg-[var(--accent-faint)]/50 ring-2 ring-[var(--accent-faint)]" : "border-[var(--line)] bg-white hover:border-[var(--ink)]")}><div className="flex items-start justify-between gap-2"><PackageOpen className={cn("size-5", p.id === productId ? "text-[var(--accent)]" : "text-[var(--muted)]")} />{p.id === productId && <Check className="size-4 text-[var(--accent)]" />}</div><div className="mt-4 text-sm font-bold">{p.name}</div><div className="mt-1 text-[11px] text-[var(--muted)]">{p.category}</div></button>)}</div> : <div className="mt-5 rounded-xl border border-dashed border-[var(--line)] p-5 text-sm text-[var(--muted)]">采购方尚未启用商品，请先在工作台的“商品库管理”中添加。</div>}</CardContent></Card>
 
-          <Card><CardContent className="p-5 sm:p-6"><div className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-xl bg-[var(--ink)] text-sm font-bold text-white">02</span><div><h2 className="font-bold">供应商基本信息</h2><p className="mt-0.5 text-xs text-[var(--muted)]">请手动填写，用于资质校验与后续联系</p></div></div><div className="mt-5 grid gap-4 sm:grid-cols-2"><label className="sm:col-span-2"><span className="text-xs font-semibold">企业名称</span><Input className="mt-2" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} placeholder="请输入供应商或企业名称" required /></label><label><span className="text-xs font-semibold">联系人</span><Input className="mt-2" value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} placeholder="请输入联系人" required /></label><label><span className="text-xs font-semibold">联系电话</span><Input className="mt-2" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="请输入联系电话" required /></label><label><span className="text-xs font-semibold">所在地区</span><Input className="mt-2" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} placeholder="例如：福建泉州" required /></label><label><span className="text-xs font-semibold">备货周期</span><div className="relative mt-2"><Input type="number" min="1" value={form.leadTime} onChange={(e) => setForm({ ...form, leadTime: e.target.value })} className="pr-12" placeholder="请输入天数" required /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--muted)]">天</span></div></label></div></CardContent></Card>
+          <Card><CardContent className="p-5 sm:p-6"><div className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-xl bg-[var(--ink)] text-sm font-bold text-white">02</span><div><h2 className="font-bold">供应商基本信息</h2><p className="mt-0.5 text-xs text-[var(--muted)]">请手动填写，用于资质校验与后续联系</p></div></div><div className="mt-5 grid gap-4 sm:grid-cols-2"><label className="sm:col-span-2"><span className="text-xs font-semibold">企业名称</span><Input className="mt-2" value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} placeholder="请输入供应商或企业名称" required /></label><label><span className="text-xs font-semibold">联系人</span><Input className="mt-2" value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} placeholder="请输入联系人" required /></label><label><span className="text-xs font-semibold">联系电话</span><Input className="mt-2" value={form.phone} readOnly placeholder="已绑定登录手机号" /></label><label><span className="text-xs font-semibold">所在地区</span><Input className="mt-2" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} placeholder="例如：福建泉州" required /></label><label><span className="text-xs font-semibold">备货周期</span><div className="relative mt-2"><Input type="number" min="1" value={form.leadTime} onChange={(e) => setForm({ ...form, leadTime: e.target.value })} className="pr-12" placeholder="请输入天数" required /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--muted)]">天</span></div></label></div></CardContent></Card>
 
           <Card><CardContent className="p-5 sm:p-6"><div className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-xl bg-[var(--ink)] text-sm font-bold text-white">03</span><div><h2 className="font-bold">报价、起订量与配合方案</h2><p className="mt-0.5 text-xs text-[var(--muted)]">请手动填写你可以真正履约的条件</p></div></div><div className="mt-5 grid gap-4 sm:grid-cols-2"><label><span className="text-xs font-semibold">含税单价</span><div className="relative mt-2"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-[var(--muted)]">¥</span><Input type="number" min="0.01" step="0.1" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className="pl-7 pr-16" placeholder="请输入报价" required /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--muted)]">元/件</span></div></label><label><span className="text-xs font-semibold">最低起订量</span><div className="relative mt-2"><Input type="number" min="1" value={form.moq} onChange={(e) => setForm({ ...form, moq: e.target.value })} className="pr-12" placeholder="请输入数量" required /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--muted)]">件</span></div></label><label><span className="text-xs font-semibold">账期</span><div className="relative mt-2"><Input type="number" min="0" value={form.payment} onChange={(e) => setForm({ ...form, payment: e.target.value })} className="pr-12" placeholder="请输入天数" required /><span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--muted)]">天</span></div></label><label className="sm:col-span-2"><span className="text-xs font-semibold">合作与售后方案</span><Textarea className="mt-2" value={form.cooperation} onChange={(e) => setForm({ ...form, cooperation: e.target.value })} placeholder="可选填：是否支持小批测款、退换政策、二单排产等" /></label></div></CardContent></Card>
         </div>

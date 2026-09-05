@@ -1,9 +1,10 @@
 import asyncio
 import json
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -11,9 +12,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine, get_db
-from app.models import Message, Negotiation, ProcurementRule, Product, Supplier
-from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, EvaluationOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, RuleOut, RuleUpdate, SupplierOfferIn
+from app.models import Message, Negotiation, ProcurementRule, Product, Supplier, SupplierAuth
+from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, EvaluationOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, RuleOut, RuleUpdate, SupplierCodeOut, SupplierCodeRequest, SupplierLoginRequest, SupplierOfferIn, SupplierTokenOut
 from app.seed import seed_demo_data
+from app.security import authorize_negotiation, check_code, issue_code, require_admin, require_supplier
 from app.services.llm import generate_negotiation_reply
 from app.services.rules import enforce_hard_rules
 from app.services.scoring import calculate_supplier_score, classify_supplier
@@ -84,6 +86,32 @@ def health() -> dict:
     return {"status": "ok", "time": datetime.utcnow().isoformat(), "llm_configured": bool(settings.deepseek_api_key)}
 
 
+@app.post("/api/auth/supplier/request-code", response_model=SupplierCodeOut)
+def request_supplier_code(payload: SupplierCodeRequest):
+    phone = payload.phone.strip()
+    code = issue_code(phone)
+    # 演示模式：验证码不发送短信，直接返回前端并打印到日志。
+    print(f"[演示验证码] 手机号 {phone} 的登录验证码为：{code}")
+    return SupplierCodeOut(phone=phone, code=code, expires_in=300)
+
+
+@app.post("/api/auth/supplier/login", response_model=SupplierTokenOut)
+def supplier_login(payload: SupplierLoginRequest, db: Session = Depends(get_db)):
+    phone = payload.phone.strip()
+    if not check_code(phone, payload.code):
+        raise HTTPException(status_code=401, detail="验证码错误或已过期")
+    auth = db.scalar(select(SupplierAuth).where(SupplierAuth.phone == phone))
+    if auth is None:
+        auth = SupplierAuth(phone=phone, access_token=secrets.token_urlsafe(32))
+        db.add(auth)
+    else:
+        auth.access_token = secrets.token_urlsafe(32)
+        auth.last_login_at = datetime.utcnow()
+    db.commit()
+    db.refresh(auth)
+    return SupplierTokenOut(access_token=auth.access_token, phone=auth.phone)
+
+
 @app.get("/api/products", response_model=list[ProductOut])
 def list_products(db: Session = Depends(get_db)):
     return db.scalars(select(Product).where(Product.active.is_(True)).order_by(Product.id)).all()
@@ -100,21 +128,21 @@ def product_manage_out(product: Product, rule: ProcurementRule) -> ProductManage
 
 
 @app.get("/api/products/manage", response_model=list[ProductManageOut])
-def manage_products(db: Session = Depends(get_db)):
+def manage_products(db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     products = db.scalars(select(Product).order_by(Product.id)).all()
     rules = {r.product_id: r for r in db.scalars(select(ProcurementRule)).all()}
     return [product_manage_out(p, rules[p.id]) for p in products if p.id in rules]
 
 
 @app.get("/api/products/catalog", response_model=list[ProductManageOut])
-def product_catalog(db: Session = Depends(get_db)):
+def product_catalog(db: Session = Depends(get_db), _supplier: SupplierAuth = Depends(require_supplier)):
     products = db.scalars(select(Product).where(Product.active.is_(True)).order_by(Product.id)).all()
     rules = {r.product_id: r for r in db.scalars(select(ProcurementRule).where(ProcurementRule.active.is_(True))).all()}
     return [product_manage_out(p, rules[p.id]) for p in products if p.id in rules]
 
 
 @app.post("/api/products", response_model=ProductManageOut, status_code=201)
-def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
+def create_product(payload: ProductCreate, db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     if payload.hard_max_price < payload.target_price:
         raise HTTPException(status_code=422, detail="硬性价格上限不能低于目标价")
     if db.scalar(select(Product).where(Product.name == payload.name.strip())):
@@ -131,7 +159,7 @@ def create_product(payload: ProductCreate, db: Session = Depends(get_db)):
 
 
 @app.put("/api/products/{product_id}", response_model=ProductManageOut)
-def update_product(product_id: int, payload: ProductUpdate, db: Session = Depends(get_db)):
+def update_product(product_id: int, payload: ProductUpdate, db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     product = db.get(Product, product_id)
     rule = db.scalar(select(ProcurementRule).where(ProcurementRule.product_id == product_id))
     if product is None or rule is None:
@@ -150,7 +178,7 @@ def update_product(product_id: int, payload: ProductUpdate, db: Session = Depend
 
 
 @app.delete("/api/products/{product_id}")
-def disable_product(product_id: int, db: Session = Depends(get_db)):
+def disable_product(product_id: int, db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     product = db.get(Product, product_id)
     rule = db.scalar(select(ProcurementRule).where(ProcurementRule.product_id == product_id))
     if product is None:
@@ -162,7 +190,7 @@ def disable_product(product_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/dashboard/summary", response_model=DashboardSummary)
-def dashboard_summary(db: Session = Depends(get_db)):
+def dashboard_summary(db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     negotiations = db.scalars(select(Negotiation).options(selectinload(Negotiation.supplier), selectinload(Negotiation.product), selectinload(Negotiation.messages)).order_by(Negotiation.updated_at.desc())).all()
     today = datetime.utcnow().date()
     items = [DashboardItem(id=n.id, supplier=n.supplier.company_name, product=n.product.name, score=n.score, price=n.quoted_price, moq=n.moq, status=n.status, classification=n.classification, is_today=n.created_at.date() == today) for n in negotiations]
@@ -177,7 +205,7 @@ def dashboard_summary(db: Session = Depends(get_db)):
 
 
 @app.get("/api/rules/{product_id}", response_model=RuleOut)
-def get_rule(product_id: int, db: Session = Depends(get_db)):
+def get_rule(product_id: int, db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     rule = db.scalar(select(ProcurementRule).where(ProcurementRule.product_id == product_id, ProcurementRule.active.is_(True)))
     if rule is None:
         raise HTTPException(status_code=404, detail="未找到该商品的采购规则")
@@ -185,7 +213,7 @@ def get_rule(product_id: int, db: Session = Depends(get_db)):
 
 
 @app.put("/api/rules/{product_id}", response_model=RuleOut)
-def update_rule(product_id: int, payload: RuleUpdate, db: Session = Depends(get_db)):
+def update_rule(product_id: int, payload: RuleUpdate, db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     if payload.hard_max_price < payload.target_price:
         raise HTTPException(status_code=422, detail="硬性价格上限不能低于目标价")
     rule = db.scalar(select(ProcurementRule).where(ProcurementRule.product_id == product_id))
@@ -199,7 +227,8 @@ def update_rule(product_id: int, payload: RuleUpdate, db: Session = Depends(get_
 
 
 @app.post("/api/suppliers/evaluate", response_model=EvaluationOut)
-def evaluate_supplier(payload: SupplierOfferIn, db: Session = Depends(get_db)):
+def evaluate_supplier(payload: SupplierOfferIn, db: Session = Depends(get_db), auth: SupplierAuth = Depends(require_supplier)):
+    payload.phone = auth.phone  # 身份以登录手机号为准，忽略表单传入的 phone
     rule = db.scalar(select(ProcurementRule).where(ProcurementRule.product_id == payload.product_id, ProcurementRule.active.is_(True)))
     if rule is None:
         raise HTTPException(status_code=404, detail="当前商品没有启用的采购规则")
@@ -243,18 +272,22 @@ def evaluate_supplier(payload: SupplierOfferIn, db: Session = Depends(get_db)):
 
 
 @app.get("/api/negotiations", response_model=list[NegotiationOut])
-def list_negotiations(db: Session = Depends(get_db)):
+def list_negotiations(db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     return db.scalars(select(Negotiation).options(selectinload(Negotiation.messages), selectinload(Negotiation.supplier), selectinload(Negotiation.product)).order_by(Negotiation.updated_at.desc())).all()
 
 
 @app.get("/api/negotiations/{negotiation_id}", response_model=NegotiationOut)
-def get_negotiation(negotiation_id: int, db: Session = Depends(get_db)):
-    return get_negotiation_or_404(db, negotiation_id)
+def get_negotiation(negotiation_id: int, db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
+    negotiation = get_negotiation_or_404(db, negotiation_id)
+    authorize_negotiation(db, negotiation.supplier.phone, authorization)
+    return negotiation
 
 
 @app.post("/api/negotiations/{negotiation_id}/messages", response_model=ChatOut)
-async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Session = Depends(get_db)):
+async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Session = Depends(get_db), auth: SupplierAuth = Depends(require_supplier)):
     negotiation = get_negotiation_or_404(db, negotiation_id)
+    if negotiation.supplier.phone != auth.phone:
+        raise HTTPException(status_code=403, detail="无权操作该谈判会话")
     history = [
         {"role": "user" if m.sender == "supplier" else "assistant", "content": m.content}
         for m in negotiation.messages
@@ -285,7 +318,7 @@ async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Sessio
 
 
 @app.post("/api/negotiations/{negotiation_id}/handoff", response_model=NegotiationOut)
-def handoff_to_human(negotiation_id: int, db: Session = Depends(get_db)):
+def handoff_to_human(negotiation_id: int, db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     negotiation = get_negotiation_or_404(db, negotiation_id)
     if negotiation.classification == "eliminated":
         raise HTTPException(status_code=409, detail="已淘汰供应商不可转入人工洽谈")
@@ -296,7 +329,7 @@ def handoff_to_human(negotiation_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/api/negotiations/{negotiation_id}/human-messages", response_model=NegotiationOut)
-def post_human_message(negotiation_id: int, payload: ChatIn, db: Session = Depends(get_db)):
+def post_human_message(negotiation_id: int, payload: ChatIn, db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     negotiation = get_negotiation_or_404(db, negotiation_id)
     if negotiation.classification == "eliminated":
         raise HTTPException(status_code=409, detail="已淘汰供应商不可继续洽谈")
@@ -307,7 +340,7 @@ def post_human_message(negotiation_id: int, payload: ChatIn, db: Session = Depen
 
 
 @app.post("/api/negotiations/{negotiation_id}/resume-ai", response_model=NegotiationOut)
-def resume_ai(negotiation_id: int, db: Session = Depends(get_db)):
+def resume_ai(negotiation_id: int, db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     negotiation = get_negotiation_or_404(db, negotiation_id)
     if negotiation.classification == "qualified":
         raise HTTPException(status_code=409, detail="优质候选已触发人工接管规则，不能恢复 AI 自动回复")
@@ -320,7 +353,7 @@ def resume_ai(negotiation_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/negotiations/{negotiation_id}/stream")
-async def stream_negotiation(negotiation_id: int):
+async def stream_negotiation(negotiation_id: int, _admin: str = Depends(require_admin)):
     async def events():
         last_signature = None
         for _ in range(900):

@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     app_name: str = "链谈 Agent API"
     database_url: str = "sqlite:///./liantan.db"
     frontend_origin: str = "http://localhost:3000"
+    admin_token: str = "lantan-admin-demo-2025"
     deepseek_api_key: str | None = None
     deepseek_model: str = "deepseek-chat"
     deepseek_base_url: str = "https://api.deepseek.com"

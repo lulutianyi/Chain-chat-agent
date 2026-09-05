@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, ArrowUp, Bot, Inbox, Loader2, Lock, UserRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { getNegotiation, sendSupplierMessage, type Negotiation } from "@/lib/api";
+import { getNegotiation, getSupplierToken, sendSupplierMessage, type Negotiation } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const statusText: Record<string, string> = { ai_active: "AI 洽谈中", manual_required: "等待人工沟通", human_active: "人工沟通中", closed: "已结束" };
@@ -19,6 +20,15 @@ export default function SupplierChatPage() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
 
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!getSupplierToken()) {
+      const next = window.location.pathname + window.location.search;
+      router.replace(`/supplier/login?next=${encodeURIComponent(next)}`);
+    }
+  }, [router]);
+
   const load = useCallback(async () => {
     const id = Number(new URLSearchParams(window.location.search).get("id") || 0);
     if (!id) { setError("缺少谈判会话编号"); setLoading(false); return; }
@@ -29,9 +39,8 @@ export default function SupplierChatPage() {
 
   const canSend = Boolean(negotiation && negotiation.status === "ai_active" && negotiation.classification === "negotiating");
 
-  async function send(e: FormEvent) {
-    e.preventDefault();
-    if (!negotiation || !draft.trim() || !canSend) return;
+  async function submit() {
+    if (!negotiation || !draft.trim() || !canSend || sending) return;
     setSending(true);
     try { await sendSupplierMessage(negotiation.id, draft.trim()); setDraft(""); await load(); } catch (err) { setError(err instanceof Error ? err.message : "发送失败"); } finally { setSending(false); }
   }
@@ -64,9 +73,9 @@ export default function SupplierChatPage() {
         </div>
 
         {canSend ? (
-          <form onSubmit={send} className="border-t border-[var(--line)] bg-white p-4">
+          <form onSubmit={e => { e.preventDefault(); void submit(); }} className="border-t border-[var(--line)] bg-white p-4">
             <div className="relative">
-              <Textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="输入你的报价或条款回复…" className="min-h-20 pr-14" />
+              <Textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void submit(); } }} placeholder="输入你的报价或条款回复…（Enter 发送，Shift+Enter 换行）" className="min-h-20 pr-14" />
               <Button type="submit" variant="accent" size="icon" disabled={!draft.trim() || sending} className="absolute bottom-2 right-2 size-9">{sending ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}</Button>
             </div>
             <div className="mt-2 text-[10px] text-[var(--muted)]">AI 采购助手会自动回复；底线与评分由程序校验，AI 不会擅自承诺下单或付款。</div>

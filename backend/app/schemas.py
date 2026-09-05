@@ -154,3 +154,23 @@ class NegotiationOut(BaseModel):
     product: ProductOut
     messages: list[MessageOut]
     model_config = ConfigDict(from_attributes=True)
+
+
+class SupplierCodeRequest(BaseModel):
+    phone: str = Field(min_length=6, max_length=40)
+
+
+class SupplierCodeOut(BaseModel):
+    phone: str
+    code: str
+    expires_in: int
+
+
+class SupplierLoginRequest(BaseModel):
+    phone: str = Field(min_length=6, max_length=40)
+    code: str = Field(min_length=6, max_length=6)
+
+
+class SupplierTokenOut(BaseModel):
+    access_token: str
+    phone: str

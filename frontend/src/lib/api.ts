@@ -1,4 +1,26 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const ADMIN_TOKEN = process.env.NEXT_PUBLIC_ADMIN_TOKEN || "";
+
+const SUPPLIER_TOKEN_KEY = "liantan_supplier_token";
+const SUPPLIER_PHONE_KEY = "liantan_supplier_phone";
+
+type AuthMode = "admin" | "supplier" | "none";
+
+function safeGet(key: string): string | null {
+  if (typeof window === "undefined") return null;
+  try { return window.localStorage.getItem(key); } catch { return null; }
+}
+
+export function getSupplierToken(): string | null { return safeGet(SUPPLIER_TOKEN_KEY); }
+export function getSupplierPhone(): string | null { return safeGet(SUPPLIER_PHONE_KEY); }
+export function setSupplierAuth(token: string, phone: string) {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(SUPPLIER_TOKEN_KEY, token); window.localStorage.setItem(SUPPLIER_PHONE_KEY, phone); } catch { /* ignore */ }
+}
+export function clearSupplierAuth() {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.removeItem(SUPPLIER_TOKEN_KEY); window.localStorage.removeItem(SUPPLIER_PHONE_KEY); } catch { /* ignore */ }
+}
 
 export type SupplierOffer = {
   product_id: number;
@@ -42,12 +64,18 @@ export type Negotiation = {
 export type SupplierReply = {
   negotiation_id: number; status: string; assistant_message: string | null; handoff_required: boolean; classification: "eliminated" | "negotiating" | "qualified"; score: number;
 };
+export type SupplierCode = { phone: string; code: string; expires_in: number };
+export type SupplierToken = { access_token: string; phone: string };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
-  });
+async function request<T>(path: string, init?: RequestInit, auth: AuthMode = "none"): Promise<T> {
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
+  if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
+  if (auth === "admin" && ADMIN_TOKEN) headers["Authorization"] = `Bearer ${ADMIN_TOKEN}`;
+  else if (auth === "supplier") {
+    const token = getSupplierToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+  }
+  const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: "请求失败" }));
     throw new Error(body.detail || `HTTP ${response.status}`);
@@ -55,26 +83,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+// —— 认证 ——
+export function requestSupplierCode(phone: string) {
+  return request<SupplierCode>("/api/auth/supplier/request-code", { method: "POST", body: JSON.stringify({ phone }) });
+}
+export function supplierLogin(phone: string, code: string) {
+  return request<SupplierToken>("/api/auth/supplier/login", { method: "POST", body: JSON.stringify({ phone, code }) });
+}
+
+// —— 供应商侧 ——
 export function evaluateSupplierOffer(payload: SupplierOffer) {
-  return request<Evaluation>("/api/suppliers/evaluate", { method: "POST", body: JSON.stringify(payload) });
+  return request<Evaluation>("/api/suppliers/evaluate", { method: "POST", body: JSON.stringify(payload) }, "supplier");
 }
+export function getProductCatalog() { return request<ManagedProduct[]>("/api/products/catalog", undefined, "supplier"); }
+export function getNegotiation(id: number) { return request<Negotiation>(`/api/negotiations/${id}`, undefined, "supplier"); }
+export function sendSupplierMessage(id: number, content: string) { return request<SupplierReply>(`/api/negotiations/${id}/messages`, { method: "POST", body: JSON.stringify({ content }) }, "supplier"); }
 
+// —— 商家侧 ——
 export function handoffNegotiation(negotiationId: number) {
-  return request<Negotiation>(`/api/negotiations/${negotiationId}/handoff`, { method: "POST" });
+  return request<Negotiation>(`/api/negotiations/${negotiationId}/handoff`, { method: "POST" }, "admin");
 }
-
 export function updateProcurementRule(productId: number, payload: Record<string, unknown>) {
-  return request(`/api/rules/${productId}`, { method: "PUT", body: JSON.stringify(payload) });
+  return request(`/api/rules/${productId}`, { method: "PUT", body: JSON.stringify(payload) }, "admin");
 }
-
-export function getManagedProducts() { return request<ManagedProduct[]>("/api/products/manage"); }
-export function getProductCatalog() { return request<ManagedProduct[]>("/api/products/catalog"); }
-export function createProduct(payload: Omit<ManagedProduct, "id" | "active">) { return request<ManagedProduct>("/api/products", { method: "POST", body: JSON.stringify(payload) }); }
-export function updateProduct(id: number, payload: Omit<ManagedProduct, "id">) { return request<ManagedProduct>(`/api/products/${id}`, { method: "PUT", body: JSON.stringify(payload) }); }
-export function disableProduct(id: number) { return request<{ ok: boolean; detail: string }>(`/api/products/${id}`, { method: "DELETE" }); }
-export function getDashboardSummary() { return request<DashboardSummary>("/api/dashboard/summary"); }
-export function getNegotiations() { return request<Negotiation[]>("/api/negotiations"); }
-export function getNegotiation(id: number) { return request<Negotiation>(`/api/negotiations/${id}`); }
-export function sendHumanMessage(id: number, content: string) { return request<Negotiation>(`/api/negotiations/${id}/human-messages`, { method: "POST", body: JSON.stringify({ content }) }); }
-export function sendSupplierMessage(id: number, content: string) { return request<SupplierReply>(`/api/negotiations/${id}/messages`, { method: "POST", body: JSON.stringify({ content }) }); }
-export function resumeAiNegotiation(id: number) { return request<Negotiation>(`/api/negotiations/${id}/resume-ai`, { method: "POST" }); }
+export function getManagedProducts() { return request<ManagedProduct[]>("/api/products/manage", undefined, "admin"); }
+export function createProduct(payload: Omit<ManagedProduct, "id" | "active">) { return request<ManagedProduct>("/api/products", { method: "POST", body: JSON.stringify(payload) }, "admin"); }
+export function updateProduct(id: number, payload: Omit<ManagedProduct, "id">) { return request<ManagedProduct>(`/api/products/${id}`, { method: "PUT", body: JSON.stringify(payload) }, "admin"); }
+export function disableProduct(id: number) { return request<{ ok: boolean; detail: string }>(`/api/products/${id}`, { method: "DELETE" }, "admin"); }
+export function getDashboardSummary() { return request<DashboardSummary>("/api/dashboard/summary", undefined, "admin"); }
+export function getNegotiations() { return request<Negotiation[]>("/api/negotiations", undefined, "admin"); }
+export function sendHumanMessage(id: number, content: string) { return request<Negotiation>(`/api/negotiations/${id}/human-messages`, { method: "POST", body: JSON.stringify({ content }) }, "admin"); }
+export function resumeAiNegotiation(id: number) { return request<Negotiation>(`/api/negotiations/${id}/resume-ai`, { method: "POST" }, "admin"); }
