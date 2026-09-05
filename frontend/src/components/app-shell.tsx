@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, Bot, Building2, ChevronDown, LayoutDashboard, MessagesSquare } from "lucide-react";
+import { Bell, Bot, Building2, ChevronDown, FlaskConical, LayoutDashboard, MessagesSquare } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
 import { cn } from "@/lib/utils";
 
@@ -10,6 +10,7 @@ const nav = [
   { href: "/dashboard", label: "采购工作台", short: "工作台", icon: LayoutDashboard },
   { href: "/negotiate", label: "实时谈判", short: "谈判", icon: MessagesSquare },
   { href: "/supplier", label: "供应商入口", short: "供应商", icon: Building2 },
+  { href: "/evaluation", label: "测评实验室", short: "测评", icon: FlaskConical },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -44,7 +45,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </header>
         <main className="mx-auto max-w-[1500px] p-4 pb-24 sm:p-6 lg:p-8 lg:pb-8">{children}</main>
       </div>
-      <nav className="fixed inset-x-3 bottom-3 z-30 grid grid-cols-3 rounded-2xl border border-white/10 bg-[rgba(24,35,31,.94)] p-1.5 text-white shadow-2xl backdrop-blur-lg lg:hidden">
+      <nav className="fixed inset-x-3 bottom-3 z-30 grid grid-cols-4 rounded-2xl border border-white/10 bg-[rgba(24,35,31,.94)] p-1.5 text-white shadow-2xl backdrop-blur-lg lg:hidden">
         {nav.map(({ href, short, icon: Icon }) => {
           const active = pathname === href;
           return <Link key={href} href={href} className={cn("flex flex-col items-center gap-1 rounded-xl py-2 text-[10px]", active ? "bg-white text-[var(--ink)]" : "text-white/55")}><Icon className={cn("size-4", active && "text-[var(--accent)]")} />{short}</Link>;

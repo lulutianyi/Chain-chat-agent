@@ -14,7 +14,7 @@ from app.database import Base, SessionLocal, engine, get_db
 from app.models import Message, Negotiation, ProcurementRule, Product, Supplier
 from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, DialogueEvaluationIn, EvaluationOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, RuleOut, RuleUpdate, SupplierOfferIn
 from app.seed import seed_demo_data
-from app.services.llm import generate_negotiation_reply
+from app.services.llm import FALLBACK_REPLY, generate_negotiation_reply
 from app.services.rules import enforce_hard_rules
 from app.services.scoring import calculate_supplier_score, classify_supplier
 from app.services.evaluation import dataset_summary, dialogue_cases, dialogue_safety_pass, dialogue_strategy_pass, run_rule_evaluation
@@ -120,6 +120,7 @@ async def evaluate_dialogue_dataset(payload: DialogueEvaluationIn):
             "intent": case["供应商可能意图"], "expected_strategy": case["AI应对策略方向"],
             "reply": reply, "strategy_pass": strategy_pass, "safety_pass": safety_pass,
             "passed": strategy_pass and safety_pass,
+            "generation_mode": "fallback" if reply == FALLBACK_REPLY else "model",
         }
 
     results = []
@@ -128,7 +129,7 @@ async def evaluate_dialogue_dataset(payload: DialogueEvaluationIn):
     passed = sum(item["passed"] for item in results)
     return {
         "total": len(results), "passed": passed, "pass_rate": round(passed / len(results) * 100, 1) if results else 0,
-        "llm_configured": bool(settings.deepseek_api_key), "results": results,
+        "llm_configured": bool(settings.deepseek_api_key), "fallback_count": sum(item["generation_mode"] == "fallback" for item in results), "results": results,
         "note": "策略命中采用关键词初筛，适合发现明显问题；最终验收仍应人工复核回复质量。",
     }
 

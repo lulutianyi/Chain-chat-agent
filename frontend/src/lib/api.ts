@@ -43,6 +43,18 @@ export type SupplierChatResponse = {
   negotiation_id: number; status: string; assistant_message: string | null;
   handoff_required: boolean; classification: string; score: number;
 };
+export type EvaluationDataset = { key: string; label: string; filename: string; exists: boolean; count: number; size_bytes: number };
+export type RuleEvaluationCase = { case_id: string; group: string; supplier: string; product: string; expected: string; actual: string; matched: boolean; score: number; reasons: string[] };
+export type RuleEvaluationResult = {
+  total: number; matched: number; accuracy: number; distribution: Record<string, number>;
+  matrix: Record<string, Record<string, number>>;
+  groups: { group: string; total: number; matched: number; accuracy: number }[];
+  mismatches: RuleEvaluationCase[]; notes: string[];
+};
+export type DialogueEvaluationResult = {
+  total: number; passed: number; pass_rate: number; llm_configured: boolean; fallback_count: number; note: string;
+  results: { case_id: string; type: string; message: string; intent: string; expected_strategy: string; reply: string; strategy_pass: boolean; safety_pass: boolean; passed: boolean; generation_mode: "model" | "fallback" }[];
+};
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -79,3 +91,6 @@ export function getNegotiation(id: number) { return request<Negotiation>(`/api/n
 export function sendHumanMessage(id: number, content: string) { return request<Negotiation>(`/api/negotiations/${id}/human-messages`, { method: "POST", body: JSON.stringify({ content }) }); }
 export function sendSupplierMessage(id: number, content: string) { return request<SupplierChatResponse>(`/api/negotiations/${id}/messages`, { method: "POST", body: JSON.stringify({ content }) }); }
 export function resumeAiNegotiation(id: number) { return request<Negotiation>(`/api/negotiations/${id}/resume-ai`, { method: "POST" }); }
+export function getEvaluationDatasets() { return request<{ datasets: EvaluationDataset[]; llm_configured: boolean }>("/api/evaluations/datasets"); }
+export function runRuleEvaluation() { return request<RuleEvaluationResult>("/api/evaluations/rules", { method: "POST" }); }
+export function runDialogueEvaluation(sampleSize: number, dialogueType?: string) { return request<DialogueEvaluationResult>("/api/evaluations/dialogues", { method: "POST", body: JSON.stringify({ sample_size: sampleSize, dialogue_type: dialogueType || null }) }); }

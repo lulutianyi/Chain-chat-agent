@@ -54,6 +54,8 @@ def run_rule_evaluation() -> dict[str, Any]:
             max_moq=int(rule["最高可接受起订量(件)"]),
             lead_days=0,
             max_lead_days=9999,
+            payment_days=int(case["账期(天)"]),
+            max_payment_days=int(rule["最短可接受账期(天)"]),
             qualifications=qualifications,
             required_qualifications=required,
         )
@@ -67,6 +69,8 @@ def run_rule_evaluation() -> dict[str, Any]:
             region=str(case["供应商所在地"]),
             preferred_regions=[],
             cooperation_rating=60,
+            payment_days=int(case["账期(天)"]),
+            max_payment_days=int(rule["最短可接受账期(天)"]),
         )
         actual, _ = classify_supplier(hard_pass=hard.passed, score=score.total, handoff_score=82)
         expected = LABEL_MAP[case["预期AI行为"]]
@@ -87,7 +91,7 @@ def run_rule_evaluation() -> dict[str, Any]:
         "matrix": matrix,
         "groups": [{"group": key, **value, "accuracy": round(value["matched"] / value["total"] * 100, 1)} for key, value in sorted(by_group.items())],
         "mismatches": [item for item in results if not item["matched"]][:100],
-        "notes": ["数据集没有交期字段，本轮不评估交期。", "当前引擎未使用账期和供应商规模评分，结果会真实暴露这一差异。", "测评数据不会写入正式供应商与谈判表。"],
+        "notes": ["数据集没有交期字段，本轮不评估交期。", "数据集写的是“最短可接受账期”，当前引擎执行“最长账期”；本轮按现有引擎运行，差异会反映在误判案例中。", "供应商规模目前未参与评分。", "测评数据不会写入正式供应商与谈判表。"],
     }
 
 
