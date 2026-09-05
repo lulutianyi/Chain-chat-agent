@@ -39,6 +39,10 @@ export type Negotiation = {
   product: { id: number; name: string; category: string; description: string };
   messages: { id: number; sender: "supplier" | "ai" | "human" | "system"; content: string; created_at: string }[];
 };
+export type SupplierChatResponse = {
+  negotiation_id: number; status: string; assistant_message: string | null;
+  handoff_required: boolean; classification: string; score: number;
+};
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -73,4 +77,5 @@ export function getDashboardSummary() { return request<DashboardSummary>("/api/d
 export function getNegotiations() { return request<Negotiation[]>("/api/negotiations"); }
 export function getNegotiation(id: number) { return request<Negotiation>(`/api/negotiations/${id}`); }
 export function sendHumanMessage(id: number, content: string) { return request<Negotiation>(`/api/negotiations/${id}/human-messages`, { method: "POST", body: JSON.stringify({ content }) }); }
+export function sendSupplierMessage(id: number, content: string) { return request<SupplierChatResponse>(`/api/negotiations/${id}/messages`, { method: "POST", body: JSON.stringify({ content }) }); }
 export function resumeAiNegotiation(id: number) { return request<Negotiation>(`/api/negotiations/${id}/resume-ai`, { method: "POST" }); }
