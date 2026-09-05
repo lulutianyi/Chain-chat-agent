@@ -54,6 +54,11 @@ class DashboardSummary(BaseModel):
     items: list[DashboardItem]
 
 
+class DialogueEvaluationIn(BaseModel):
+    sample_size: int = Field(default=10, ge=1, le=20)
+    dialogue_type: str | None = None
+
+
 class RuleOut(BaseModel):
     id: int
     product_id: int

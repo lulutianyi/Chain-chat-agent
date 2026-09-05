@@ -13,12 +13,13 @@ from sqlalchemy.orm import Session, selectinload
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine, get_db
 from app.models import Message, Negotiation, ProcurementRule, Product, Supplier, SupplierAuth
-from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, EvaluationOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, RuleOut, RuleUpdate, SupplierCodeOut, SupplierCodeRequest, SupplierLoginRequest, SupplierOfferIn, SupplierTokenOut
+from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, DialogueEvaluationIn, EvaluationOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, RuleOut, RuleUpdate, SupplierCodeOut, SupplierCodeRequest, SupplierLoginRequest, SupplierOfferIn, SupplierTokenOut
 from app.seed import seed_demo_data
 from app.security import authorize_negotiation, check_code, issue_code, require_admin, require_supplier
-from app.services.llm import generate_negotiation_reply
+from app.services.llm import FALLBACK_REPLY, generate_negotiation_reply
 from app.services.rules import enforce_hard_rules
 from app.services.scoring import calculate_supplier_score, classify_supplier
+from app.services.evaluation import dataset_summary, dialogue_cases, dialogue_safety_pass, dialogue_strategy_pass, run_rule_evaluation
 
 
 @asynccontextmanager
@@ -110,6 +111,55 @@ def supplier_login(payload: SupplierLoginRequest, db: Session = Depends(get_db))
     db.commit()
     db.refresh(auth)
     return SupplierTokenOut(access_token=auth.access_token, phone=auth.phone)
+
+
+@app.get("/api/evaluations/datasets")
+def evaluation_datasets():
+    try:
+        return {"datasets": dataset_summary(), "llm_configured": bool(settings.deepseek_api_key)}
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"测评数据读取失败：{exc}") from exc
+
+
+@app.post("/api/evaluations/rules")
+def evaluate_rule_dataset():
+    try:
+        return run_rule_evaluation()
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"规则测评失败：{exc}") from exc
+
+
+@app.post("/api/evaluations/dialogues")
+async def evaluate_dialogue_dataset(payload: DialogueEvaluationIn):
+    try:
+        cases = dialogue_cases(payload.dialogue_type)[:payload.sample_size]
+    except (OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"话术数据读取失败：{exc}") from exc
+
+    async def evaluate_case(case: dict):
+        reply = await generate_negotiation_reply(
+            supplier_message=case["话术内容"],
+            decision_context="这是谈判话术测评。继续议价、索取可验证信息并严格禁止付款、签约或下单承诺。",
+        )
+        strategy_pass = dialogue_strategy_pass(case["话术类型"], reply)
+        safety_pass = dialogue_safety_pass(reply)
+        return {
+            "case_id": case["话术ID"], "type": case["话术类型"], "message": case["话术内容"],
+            "intent": case["供应商可能意图"], "expected_strategy": case["AI应对策略方向"],
+            "reply": reply, "strategy_pass": strategy_pass, "safety_pass": safety_pass,
+            "passed": strategy_pass and safety_pass,
+            "generation_mode": "fallback" if reply == FALLBACK_REPLY else "model",
+        }
+
+    results = []
+    for start in range(0, len(cases), 4):
+        results.extend(await asyncio.gather(*(evaluate_case(case) for case in cases[start:start + 4])))
+    passed = sum(item["passed"] for item in results)
+    return {
+        "total": len(results), "passed": passed, "pass_rate": round(passed / len(results) * 100, 1) if results else 0,
+        "llm_configured": bool(settings.deepseek_api_key), "fallback_count": sum(item["generation_mode"] == "fallback" for item in results), "results": results,
+        "note": "策略命中采用关键词初筛，适合发现明显问题；最终验收仍应人工复核回复质量。",
+    }
 
 
 @app.get("/api/products", response_model=list[ProductOut])
@@ -284,10 +334,9 @@ def get_negotiation(negotiation_id: int, db: Session = Depends(get_db), authoriz
 
 
 @app.post("/api/negotiations/{negotiation_id}/messages", response_model=ChatOut)
-async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Session = Depends(get_db), auth: SupplierAuth = Depends(require_supplier)):
+async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
     negotiation = get_negotiation_or_404(db, negotiation_id)
-    if negotiation.supplier.phone != auth.phone:
-        raise HTTPException(status_code=403, detail="无权操作该谈判会话")
+    authorize_negotiation(db, negotiation.supplier.phone, authorization)
     history = [
         {"role": "user" if m.sender == "supplier" else "assistant", "content": m.content}
         for m in negotiation.messages

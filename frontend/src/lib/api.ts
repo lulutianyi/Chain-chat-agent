@@ -66,6 +66,18 @@ export type SupplierReply = {
 };
 export type SupplierCode = { phone: string; code: string; expires_in: number };
 export type SupplierToken = { access_token: string; phone: string };
+export type EvaluationDataset = { key: string; label: string; filename: string; exists: boolean; count: number; size_bytes: number };
+export type RuleEvaluationCase = { case_id: string; group: string; supplier: string; product: string; expected: string; actual: string; matched: boolean; score: number; reasons: string[] };
+export type RuleEvaluationResult = {
+  total: number; matched: number; accuracy: number; distribution: Record<string, number>;
+  matrix: Record<string, Record<string, number>>;
+  groups: { group: string; total: number; matched: number; accuracy: number }[];
+  mismatches: RuleEvaluationCase[]; notes: string[];
+};
+export type DialogueEvaluationResult = {
+  total: number; passed: number; pass_rate: number; llm_configured: boolean; fallback_count: number; note: string;
+  results: { case_id: string; type: string; message: string; intent: string; expected_strategy: string; reply: string; strategy_pass: boolean; safety_pass: boolean; passed: boolean; generation_mode: "model" | "fallback" }[];
+};
 
 async function request<T>(path: string, init?: RequestInit, auth: AuthMode = "none"): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
@@ -96,8 +108,8 @@ export function evaluateSupplierOffer(payload: SupplierOffer) {
   return request<Evaluation>("/api/suppliers/evaluate", { method: "POST", body: JSON.stringify(payload) }, "supplier");
 }
 export function getProductCatalog() { return request<ManagedProduct[]>("/api/products/catalog", undefined, "supplier"); }
-export function getNegotiation(id: number) { return request<Negotiation>(`/api/negotiations/${id}`, undefined, "supplier"); }
-export function sendSupplierMessage(id: number, content: string) { return request<SupplierReply>(`/api/negotiations/${id}/messages`, { method: "POST", body: JSON.stringify({ content }) }, "supplier"); }
+export function getNegotiation(id: number, auth: AuthMode = "supplier") { return request<Negotiation>(`/api/negotiations/${id}`, undefined, auth); }
+export function sendSupplierMessage(id: number, content: string, auth: AuthMode = "supplier") { return request<SupplierReply>(`/api/negotiations/${id}/messages`, { method: "POST", body: JSON.stringify({ content }) }, auth); }
 
 // —— 商家侧 ——
 export function handoffNegotiation(negotiationId: number) {
@@ -114,3 +126,6 @@ export function getDashboardSummary() { return request<DashboardSummary>("/api/d
 export function getNegotiations() { return request<Negotiation[]>("/api/negotiations", undefined, "admin"); }
 export function sendHumanMessage(id: number, content: string) { return request<Negotiation>(`/api/negotiations/${id}/human-messages`, { method: "POST", body: JSON.stringify({ content }) }, "admin"); }
 export function resumeAiNegotiation(id: number) { return request<Negotiation>(`/api/negotiations/${id}/resume-ai`, { method: "POST" }, "admin"); }
+export function getEvaluationDatasets() { return request<{ datasets: EvaluationDataset[]; llm_configured: boolean }>("/api/evaluations/datasets"); }
+export function runRuleEvaluation() { return request<RuleEvaluationResult>("/api/evaluations/rules", { method: "POST" }); }
+export function runDialogueEvaluation(sampleSize: number, dialogueType?: string) { return request<DialogueEvaluationResult>("/api/evaluations/dialogues", { method: "POST", body: JSON.stringify({ sample_size: sampleSize, dialogue_type: dialogueType || null }) }); }
