@@ -8,13 +8,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { getNegotiation, getSupplierToken, sendSupplierMessage, type Negotiation } from "@/lib/api";
+import { getNegotiation, getSupplierNegotiations, getSupplierToken, sendSupplierMessage, type Negotiation } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const statusText: Record<string, string> = { ai_active: "AI 洽谈中", manual_required: "等待人工沟通", human_active: "人工沟通中", closed: "已结束" };
 
 export default function SupplierChatPage() {
   const [negotiation, setNegotiation] = useState<Negotiation | null>(null);
+  const [sessions, setSessions] = useState<Negotiation[] | null>(null);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -29,13 +30,24 @@ export default function SupplierChatPage() {
     }
   }, [router]);
 
-  const load = useCallback(async () => {
-    const id = Number(new URLSearchParams(window.location.search).get("id") || 0);
-    if (!id) { setError("缺少谈判会话编号"); setLoading(false); return; }
-    try { setNegotiation(await getNegotiation(id)); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "无法读取谈判会话"); } finally { setLoading(false); }
+  const load = useCallback(async (id?: number) => {
+    const target = id ?? Number(new URLSearchParams(window.location.search).get("id") || 0);
+    if (!target) {
+      // URL 上没有会话编号时，列出登录手机号名下的全部会话，供供应商找回历史洽谈。
+      try { setSessions(await getSupplierNegotiations()); } catch (e) { setError(e instanceof Error ? e.message : "无法读取洽谈会话"); } finally { setLoading(false); }
+      return;
+    }
+    try { setNegotiation(await getNegotiation(target)); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "无法读取谈判会话"); } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  function open(id: number) {
+    setLoading(true);
+    setSessions(null);
+    window.history.replaceState(null, "", `/supplier/chat?id=${id}`);
+    void load(id);
+  }
 
   const canSend = Boolean(negotiation && negotiation.status === "ai_active" && negotiation.classification === "negotiating");
 
@@ -46,7 +58,20 @@ export default function SupplierChatPage() {
   }
 
   if (loading) return <div className="py-20 text-center text-sm text-[var(--muted)]">正在读取洽谈会话…</div>;
-  if (!negotiation) return <Card className="mx-auto max-w-xl"><CardContent className="p-10 text-center"><Inbox className="mx-auto size-10 text-[var(--muted)]" /><h1 className="mt-4 text-xl font-bold">无法读取洽谈会话</h1><p className="mt-2 text-sm text-[var(--muted)]">{error || "会话不存在，请检查链接。"}</p><Link href="/supplier"><Button variant="outline" className="mt-6">返回提交资料</Button></Link></CardContent></Card>;
+  if (!negotiation) {
+    if (error && !sessions) return <Card className="mx-auto max-w-xl"><CardContent className="p-10 text-center"><Inbox className="mx-auto size-10 text-[var(--muted)]" /><h1 className="mt-4 text-xl font-bold">无法读取洽谈会话</h1><p className="mt-2 text-sm text-[var(--muted)]">{error}</p><Link href="/supplier"><Button variant="outline" className="mt-6">返回提交资料</Button></Link></CardContent></Card>;
+    return (
+      <div className="mx-auto flex max-w-3xl flex-col animate-rise">
+        <div className="mb-5"><h1 className="text-2xl font-bold tracking-tight">我的洽谈会话</h1><p className="mt-1 text-sm text-[var(--muted)]">登录手机号名下的全部供货洽谈，点击即可继续沟通，不再受页面跳转影响。</p></div>
+        {error && <div className="mb-4 rounded-xl border border-[var(--warning)]/20 bg-[var(--warning-faint)] p-3 text-sm text-[var(--warning)]">{error}</div>}
+        {sessions?.length ? (
+          <div className="space-y-3">{sessions.map(item => <Card key={item.id} className="transition hover:-translate-y-0.5 hover:shadow-md"><CardContent className="flex items-center justify-between gap-4 p-4"><div><div className="flex flex-wrap items-center gap-2 text-sm font-bold">{item.product.name}<Badge className={cn("border-0 px-2 py-0.5 text-[10px]", item.status === "ai_active" ? "bg-[var(--success-faint)] text-[var(--success)]" : "bg-[var(--accent-faint)] text-[var(--accent-strong)]")}>{statusText[item.status] ?? item.status}</Badge></div><div className="mt-1 text-xs text-[var(--muted)]">会话 #{item.id} · 评分 {item.score} · {item.messages.length} 条消息</div></div><Button variant="accent" size="sm" onClick={() => open(item.id)}>继续洽谈</Button></CardContent></Card>)}</div>
+        ) : (
+          <Card><CardContent className="p-10 text-center"><Inbox className="mx-auto size-10 text-[var(--muted)]" /><h1 className="mt-4 text-xl font-bold">还没有洽谈会话</h1><p className="mt-2 text-sm text-[var(--muted)]">先提交供货方案，系统会为你创建与采购 AI 的洽谈会话。</p><Link href="/supplier"><Button variant="accent" className="mt-6">去提交资料</Button></Link></CardContent></Card>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col animate-rise">
