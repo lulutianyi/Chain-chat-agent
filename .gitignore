@@ -13,6 +13,7 @@ backend/.venv/
 backend/__pycache__/
 backend/**/__pycache__/
 backend/*.db
+backend/uploads/
 backend/.pytest_cache/
 
 # Local review artifacts

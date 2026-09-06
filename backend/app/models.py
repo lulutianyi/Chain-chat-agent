@@ -47,6 +47,8 @@ class Supplier(Base):
     cooperation_rating: Mapped[int] = mapped_column(Integer, default=60)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+    qualification_files: Mapped[list["QualificationFile"]] = relationship()
+
 
 class Negotiation(Base):
     __tablename__ = "negotiations"
@@ -72,6 +74,19 @@ class Negotiation(Base):
     product: Mapped[Product] = relationship()
     supplier: Mapped[Supplier] = relationship()
     messages: Mapped[list["Message"]] = relationship(back_populates="negotiation", cascade="all, delete-orphan")
+
+
+class QualificationFile(Base):
+    __tablename__ = "qualification_files"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), index=True)
+    original_name: Mapped[str] = mapped_column(String(255))
+    stored_name: Mapped[str] = mapped_column(String(128))
+    content_type: Mapped[str] = mapped_column(String(128), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class Message(Base):

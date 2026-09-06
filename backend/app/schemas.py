@@ -95,6 +95,7 @@ class SupplierOfferIn(BaseModel):
     lead_days: int = Field(gt=0)
     payment_days: int = Field(default=0, ge=0)
     qualifications: list[str]
+    qualification_file_ids: list[str] = []
     cooperation_note: str = Field(default="", max_length=1500)
     cooperation_rating: int = Field(default=60, ge=0, le=100)
 
@@ -137,12 +138,23 @@ class MessageOut(BaseModel):
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
+class QualificationFileOut(BaseModel):
+    id: str
+    original_name: str
+    content_type: str
+    size_bytes: int
+    verified: bool
+    uploaded_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 class SupplierSummary(BaseModel):
     id: int
     company_name: str
     contact_name: str
     region: str
     qualifications: list[str]
+    qualification_files: list[QualificationFileOut] = []
     model_config = ConfigDict(from_attributes=True)
 
 class NegotiationOut(BaseModel):

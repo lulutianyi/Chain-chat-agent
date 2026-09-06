@@ -3,23 +3,31 @@ import json
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine, get_db
-from app.models import Message, Negotiation, ProcurementRule, Product, Supplier, SupplierAuth
-from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, DialogueEvaluationIn, EvaluationOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, RuleOut, RuleUpdate, SupplierCodeOut, SupplierCodeRequest, SupplierLoginRequest, SupplierOfferIn, SupplierTokenOut
+from app.models import Message, Negotiation, ProcurementRule, Product, QualificationFile, Supplier, SupplierAuth
+from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, DialogueEvaluationIn, EvaluationOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, QualificationFileOut, RuleOut, RuleUpdate, SupplierCodeOut, SupplierCodeRequest, SupplierLoginRequest, SupplierOfferIn, SupplierTokenOut
 from app.seed import seed_demo_data
 from app.security import authorize_negotiation, check_code, issue_code, require_admin, require_supplier
-from app.services.llm import FALLBACK_REPLY, generate_negotiation_reply
+from app.services.llm import FALLBACK_REPLY, generate_negotiation_reply, generate_negotiation_turn
 from app.services.rules import enforce_hard_rules
 from app.services.scoring import calculate_supplier_score, classify_supplier
-from app.services.evaluation import dataset_summary, dialogue_cases, dialogue_safety_pass, dialogue_strategy_pass, run_rule_evaluation
+from app.services.evaluation import LABEL_ZH, dataset_summary, dialogue_cases, dialogue_safety_pass, dialogue_strategy_pass, run_rule_evaluation
+
+POLITE_CLOSE_REPLY = "感谢您提供资料。当前供货条件与我们的采购要求暂不匹配，本次暂不继续洽谈。"
+
+# 资质文件本地存储（人工核验模式）：供应商上传，商家在谈判页查看并标记核验结果。
+UPLOAD_DIR = Path(__file__).resolve().parents[1] / "uploads"
+ALLOWED_UPLOAD_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 
 @asynccontextmanager
@@ -45,41 +53,55 @@ def get_negotiation_or_404(db: Session, negotiation_id: int) -> Negotiation:
     item = db.scalar(
         select(Negotiation)
         .where(Negotiation.id == negotiation_id)
-        .options(selectinload(Negotiation.messages), selectinload(Negotiation.supplier), selectinload(Negotiation.product))
+        .options(selectinload(Negotiation.messages), selectinload(Negotiation.supplier).selectinload(Supplier.qualification_files), selectinload(Negotiation.product))
     )
     if item is None:
         raise HTTPException(status_code=404, detail="谈判记录不存在")
     return item
 
 
-def evaluate_offer(rule: ProcurementRule, offer: SupplierOfferIn) -> tuple:
+def evaluate_terms(rule: ProcurementRule, *, quoted_price: float, moq: int, lead_days: int, payment_days: int, qualifications: list[str], region: str, cooperation_rating: int) -> tuple:
+    """底线校验 + 加权评分 + 三级分类。提交报价与谈判中重新评估共用这一份决策逻辑。"""
     hard = enforce_hard_rules(
-        quoted_price=offer.quoted_price,
+        quoted_price=quoted_price,
         hard_max_price=rule.hard_max_price,
-        moq=offer.moq,
+        moq=moq,
         max_moq=rule.max_moq,
-        lead_days=offer.lead_days,
+        lead_days=lead_days,
         max_lead_days=rule.max_lead_days,
-        payment_days=offer.payment_days,
+        payment_days=payment_days,
         max_payment_days=rule.max_payment_days,
-        qualifications=offer.qualifications,
+        qualifications=qualifications,
         required_qualifications=rule.required_qualifications,
     )
     scored = calculate_supplier_score(
-        quoted_price=offer.quoted_price,
+        quoted_price=quoted_price,
         target_price=rule.target_price,
-        moq=offer.moq,
+        moq=moq,
         max_moq=rule.max_moq,
-        qualifications=offer.qualifications,
+        qualifications=qualifications,
         required_qualifications=rule.required_qualifications,
-        region=offer.region,
+        region=region,
         preferred_regions=rule.preferred_regions,
-        cooperation_rating=offer.cooperation_rating,
-        payment_days=offer.payment_days,
+        cooperation_rating=cooperation_rating,
+        payment_days=payment_days,
         max_payment_days=rule.max_payment_days,
     )
     classification, action = classify_supplier(hard_pass=hard.passed, score=scored.total, handoff_score=rule.handoff_score)
     return hard, scored, classification, action
+
+
+def evaluate_offer(rule: ProcurementRule, offer: SupplierOfferIn) -> tuple:
+    return evaluate_terms(
+        rule,
+        quoted_price=offer.quoted_price,
+        moq=offer.moq,
+        lead_days=offer.lead_days,
+        payment_days=offer.payment_days,
+        qualifications=offer.qualifications,
+        region=offer.region,
+        cooperation_rating=offer.cooperation_rating,
+    )
 
 
 @app.get("/api/health")
@@ -111,6 +133,61 @@ def supplier_login(payload: SupplierLoginRequest, db: Session = Depends(get_db))
     db.commit()
     db.refresh(auth)
     return SupplierTokenOut(access_token=auth.access_token, phone=auth.phone)
+
+
+@app.get("/api/supplier/negotiations", response_model=list[NegotiationOut])
+def list_supplier_negotiations(db: Session = Depends(get_db), auth: SupplierAuth = Depends(require_supplier)):
+    # 供应商找回自己的历史会话：按登录手机号匹配归属，仅返回本人会话。
+    return db.scalars(
+        select(Negotiation)
+        .join(Supplier, Negotiation.supplier_id == Supplier.id)
+        .where(Supplier.phone == auth.phone)
+        .options(selectinload(Negotiation.messages), selectinload(Negotiation.supplier).selectinload(Supplier.qualification_files), selectinload(Negotiation.product))
+        .order_by(Negotiation.updated_at.desc())
+    ).all()
+
+
+@app.post("/api/uploads/qualification-files", response_model=QualificationFileOut)
+async def upload_qualification_file(file: UploadFile = File(...), db: Session = Depends(get_db), _auth: SupplierAuth = Depends(require_supplier)):
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ALLOWED_UPLOAD_SUFFIXES:
+        raise HTTPException(status_code=415, detail="仅支持 jpg / jpeg / png / webp 图片或 pdf 文件")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=422, detail="文件内容为空")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="单个文件不能超过 5MB")
+    file_id = secrets.token_hex(16)
+    stored_name = f"{file_id}{suffix}"
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    (UPLOAD_DIR / stored_name).write_bytes(data)
+    original_name = file.filename or stored_name
+    content_type = file.content_type or ""
+    db.add(QualificationFile(id=file_id, supplier_id=None, original_name=original_name, stored_name=stored_name, content_type=content_type, size_bytes=len(data)))
+    db.commit()
+    return QualificationFileOut(id=file_id, original_name=original_name, content_type=content_type, size_bytes=len(data), verified=False, uploaded_at=datetime.utcnow())
+
+
+@app.get("/api/uploads/{file_id}")
+def download_qualification_file(file_id: str, db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
+    row = db.get(QualificationFile, file_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="资质文件不存在")
+    path = UPLOAD_DIR / row.stored_name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="文件已丢失，请联系供应商重新上传")
+    return FileResponse(path, filename=row.original_name, media_type=row.content_type or None)
+
+
+@app.post("/api/qualification-files/{file_id}/verify", response_model=QualificationFileOut)
+def toggle_qualification_verified(file_id: str, db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
+    row = db.get(QualificationFile, file_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="资质文件不存在")
+    row.verified = not row.verified
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @app.get("/api/evaluations/datasets")
@@ -282,6 +359,8 @@ def evaluate_supplier(payload: SupplierOfferIn, db: Session = Depends(get_db), a
     rule = db.scalar(select(ProcurementRule).where(ProcurementRule.product_id == payload.product_id, ProcurementRule.active.is_(True)))
     if rule is None:
         raise HTTPException(status_code=404, detail="当前商品没有启用的采购规则")
+    if payload.qualifications and not payload.qualification_file_ids:
+        raise HTTPException(status_code=422, detail="已勾选资质，请至少上传一份资质文件供人工核验")
     hard, scored, classification, action = evaluate_offer(rule, payload)
     supplier = Supplier(
         company_name=payload.company_name,
@@ -294,6 +373,12 @@ def evaluate_supplier(payload: SupplierOfferIn, db: Session = Depends(get_db), a
     )
     db.add(supplier)
     db.flush()
+    if payload.qualification_file_ids:
+        claimed = db.scalars(
+            select(QualificationFile).where(QualificationFile.id.in_(payload.qualification_file_ids), QualificationFile.supplier_id.is_(None))
+        ).all()
+        for row in claimed:
+            row.supplier_id = supplier.id
     status = "closed" if classification == "eliminated" else "manual_required" if classification == "qualified" else "ai_active"
     negotiation = Negotiation(
         product_id=payload.product_id,
@@ -323,7 +408,7 @@ def evaluate_supplier(payload: SupplierOfferIn, db: Session = Depends(get_db), a
 
 @app.get("/api/negotiations", response_model=list[NegotiationOut])
 def list_negotiations(db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
-    return db.scalars(select(Negotiation).options(selectinload(Negotiation.messages), selectinload(Negotiation.supplier), selectinload(Negotiation.product)).order_by(Negotiation.updated_at.desc())).all()
+    return db.scalars(select(Negotiation).options(selectinload(Negotiation.messages), selectinload(Negotiation.supplier).selectinload(Supplier.qualification_files), selectinload(Negotiation.product)).order_by(Negotiation.updated_at.desc())).all()
 
 
 @app.get("/api/negotiations/{negotiation_id}", response_model=NegotiationOut)
@@ -351,19 +436,63 @@ async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Sessio
         return ChatOut(negotiation_id=negotiation.id, status=negotiation.status, assistant_message=None, handoff_required=True, classification=negotiation.classification, score=negotiation.score)
 
     if negotiation.status == "closed" or negotiation.classification == "eliminated":
-        closing = "感谢您提供资料。当前供货条件与我们的采购要求暂不匹配，本次暂不继续洽谈。"
-        db.add(Message(negotiation_id=negotiation.id, sender="ai", content=closing))
+        db.add(Message(negotiation_id=negotiation.id, sender="ai", content=POLITE_CLOSE_REPLY))
         db.commit()
-        return ChatOut(negotiation_id=negotiation.id, status="closed", assistant_message=closing, handoff_required=False, classification="eliminated", score=negotiation.score)
+        return ChatOut(negotiation_id=negotiation.id, status="closed", assistant_message=POLITE_CLOSE_REPLY, handoff_required=False, classification="eliminated", score=negotiation.score)
 
-    reply = await generate_negotiation_reply(
+    rule = db.scalar(select(ProcurementRule).where(ProcurementRule.product_id == negotiation.product_id, ProcurementRule.active.is_(True)))
+    turn = await generate_negotiation_turn(
         supplier_message=payload.content,
         decision_context=f"继续 AI 议价；当前评分 {negotiation.score}；禁止做出下单或付款承诺。",
         history=history,
+        extract_terms=rule is not None,
     )
+    reply = turn.reply
+    handoff_required = False
+
+    # 供应商在对话中给出明确新条款时，程序重新执行底线校验与评分；AI 只转述条款，不做决策。
+    updates = []
+    if turn.quoted_price is not None and float(turn.quoted_price) != negotiation.quoted_price:
+        negotiation.quoted_price = float(turn.quoted_price)
+        updates.append(f"报价 ¥{turn.quoted_price:g}/件")
+    if turn.moq is not None and int(turn.moq) != negotiation.moq:
+        negotiation.moq = int(turn.moq)
+        updates.append(f"起订量 {turn.moq} 件")
+    if turn.lead_days is not None and int(turn.lead_days) != negotiation.lead_days:
+        negotiation.lead_days = int(turn.lead_days)
+        updates.append(f"交期 {turn.lead_days} 天")
+    if turn.payment_days is not None and int(turn.payment_days) != negotiation.payment_days:
+        negotiation.payment_days = int(turn.payment_days)
+        updates.append(f"账期 {turn.payment_days} 天")
+
+    if rule is not None and updates:
+        previous_score = negotiation.score
+        supplier = negotiation.supplier
+        hard, scored, classification, _ = evaluate_terms(
+            rule,
+            quoted_price=negotiation.quoted_price,
+            moq=negotiation.moq,
+            lead_days=negotiation.lead_days,
+            payment_days=negotiation.payment_days,
+            qualifications=supplier.qualifications or [],
+            region=supplier.region,
+            cooperation_rating=supplier.cooperation_rating,
+        )
+        negotiation.score = scored.total
+        negotiation.hard_fail_reasons = hard.reasons
+        negotiation.classification = classification
+        db.add(Message(negotiation_id=negotiation.id, sender="system", content=f"供应商更新条件（{'、'.join(updates)}），程序重新校验评分：{previous_score} → {scored.total}，分类调整为「{LABEL_ZH[classification]}」。"))
+        if classification == "eliminated":
+            negotiation.status = "closed"
+            reply = POLITE_CLOSE_REPLY
+        elif classification == "qualified":
+            negotiation.status = "manual_required"
+            handoff_required = True
+            reply = f"{reply}\n\n（系统提示：贵方最新条件已达到优质候选标准，接下来将由采购负责人与您直接对接。）"
+
     db.add(Message(negotiation_id=negotiation.id, sender="ai", content=reply))
     db.commit()
-    return ChatOut(negotiation_id=negotiation.id, status=negotiation.status, assistant_message=reply, handoff_required=False, classification=negotiation.classification, score=negotiation.score)
+    return ChatOut(negotiation_id=negotiation.id, status=negotiation.status, assistant_message=reply, handoff_required=handoff_required, classification=negotiation.classification, score=negotiation.score)
 
 
 @app.post("/api/negotiations/{negotiation_id}/handoff", response_model=NegotiationOut)
