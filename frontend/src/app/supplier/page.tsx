@@ -207,6 +207,10 @@ export default function SupplierPage() {
           <p className="text-center text-[10px] leading-4 text-[var(--muted)]">提交即表示你确认信息真实。系统会将报价和谈判记录用于本次供应商评估。</p>
         </div>
       </form>
+
+      <div className="mt-10 flex justify-center">
+        <Link href="/dashboard" className="text-xs text-[var(--muted)]/70 transition-colors hover:text-[var(--muted)]">点击跳转链谈Agent主页（测试使用）</Link>
+      </div>
     </div>
   );
 }
