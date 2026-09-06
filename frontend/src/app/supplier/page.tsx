@@ -2,14 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowRight, Building2, Check, CheckCircle2, FileBadge2, LocateFixed, PackageOpen, ShieldCheck, Sparkles, UploadCloud, XCircle } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, Building2, Check, CheckCircle2, FileBadge2, LocateFixed, PackageOpen, ShieldCheck, Sparkles, UploadCloud, X, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { evaluateSupplierOffer, getProductCatalog, getSupplierPhone, getSupplierToken, type ManagedProduct } from "@/lib/api";
+import { evaluateSupplierOffer, getProductCatalog, getSupplierPhone, getSupplierToken, uploadQualificationFile, type ManagedProduct, type QualificationFile } from "@/lib/api";
 import { QUALIFICATION_OPTIONS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
@@ -23,9 +23,31 @@ export default function SupplierPage() {
   const [productId, setProductId] = useState<number | null>(null);
   const [form, setForm] = useState({ company: "", contact: "", phone: "", price: "", moq: "", region: "", leadTime: "", payment: "", cooperation: "" });
   const [qualifications, setQualifications] = useState<string[]>([]);
+  const [qualFiles, setQualFiles] = useState<QualificationFile[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const qualsNeedFiles = qualifications.length > 0 && qualFiles.length === 0;
   const product = products.find((p) => p.id === productId);
-  const isReady = Boolean(product && form.company.trim() && form.contact.trim() && form.phone.trim() && form.price && form.moq && form.region.trim() && form.leadTime && form.payment);
+  const isReady = Boolean(product && form.company.trim() && form.contact.trim() && form.phone.trim() && form.price && form.moq && form.region.trim() && form.leadTime && form.payment && !qualsNeedFiles);
   const router = useRouter();
+
+  async function handleFiles(files: FileList | null) {
+    if (!files?.length) return;
+    setUploading(true);
+    setUploadError("");
+    try {
+      for (const file of Array.from(files)) {
+        const uploaded = await uploadQualificationFile(file);
+        setQualFiles((current) => [...current, uploaded]);
+      }
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : "上传失败，请重试");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
 
   useEffect(() => {
     if (!getSupplierToken()) {
@@ -75,6 +97,7 @@ export default function SupplierPage() {
         lead_days: Number(form.leadTime),
         payment_days: Number(form.payment),
         qualifications,
+        qualification_file_ids: qualFiles.map((file) => file.id),
         cooperation_note: form.cooperation,
         cooperation_rating: form.cooperation.length > 24 ? 90 : 60,
       });
@@ -149,7 +172,11 @@ export default function SupplierPage() {
         </div>
 
         <div className="space-y-5 lg:sticky lg:top-20 lg:self-start">
-          <Card><CardContent className="p-5"><div className="flex items-center gap-2 text-sm font-bold"><FileBadge2 className="size-4 text-[var(--accent)]" />资质与能力</div><div className="mt-4 space-y-2">{QUALIFICATION_OPTIONS.map((q) => <button type="button" key={q} onClick={() => toggleQualification(q)} className={cn("flex w-full items-center justify-between rounded-xl border p-3 text-sm font-medium", qualifications.includes(q) ? "border-[var(--success)]/20 bg-[var(--success-faint)] text-[var(--success)]" : "border-[var(--line)] bg-white text-[var(--muted)]")}><span>{q}</span><span className={cn("grid size-5 place-items-center rounded-md border", qualifications.includes(q) ? "border-[var(--success)] bg-[var(--success)] text-white" : "border-[var(--line)]")} >{qualifications.includes(q) && <Check className="size-3" />}</span></button>)}</div><button type="button" className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--line)] p-3 text-xs font-semibold text-[var(--muted)] hover:border-[var(--ink)]"><UploadCloud className="size-4" />上传资质文件</button></CardContent></Card>
+          <Card><CardContent className="p-5"><div className="flex items-center gap-2 text-sm font-bold"><FileBadge2 className="size-4 text-[var(--accent)]" />资质与能力</div><div className="mt-4 space-y-2">{QUALIFICATION_OPTIONS.map((q) => <button type="button" key={q} onClick={() => toggleQualification(q)} className={cn("flex w-full items-center justify-between rounded-xl border p-3 text-sm font-medium", qualifications.includes(q) ? "border-[var(--success)]/20 bg-[var(--success-faint)] text-[var(--success)]" : "border-[var(--line)] bg-white text-[var(--muted)]")}><span>{q}</span><span className={cn("grid size-5 place-items-center rounded-md border", qualifications.includes(q) ? "border-[var(--success)] bg-[var(--success)] text-white" : "border-[var(--line)]")} >{qualifications.includes(q) && <Check className="size-3" />}</span></button>)}</div><input ref={fileInputRef} type="file" multiple accept="image/*,.pdf" className="hidden" onChange={(e) => void handleFiles(e.target.files)} />
+<button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--line)] p-3 text-xs font-semibold text-[var(--muted)] hover:border-[var(--ink)] disabled:opacity-60"><UploadCloud className="size-4" />{uploading ? "正在上传…" : "上传资质文件（图片或 PDF，供商家人工核验）"}</button>
+{uploadError && <div className="mt-2 text-[11px] font-semibold text-[var(--warning)]">{uploadError}</div>}
+{qualsNeedFiles && <div className="mt-2 text-[11px] font-semibold text-[var(--warning)]">已勾选资质，请至少上传一份资质文件后提交</div>}
+{!!qualFiles.length && <div className="mt-3 space-y-2">{qualFiles.map((file) => <div key={file.id} className="flex items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-white px-3 py-2 text-xs"><span className="truncate font-medium">{file.original_name}</span><span className="flex shrink-0 items-center gap-2 text-[var(--muted)]"><span>{Math.max(1, Math.round(file.size_bytes / 1024))} KB</span><button type="button" aria-label="移除文件" onClick={() => setQualFiles((current) => current.filter((f) => f.id !== file.id))} className="grid size-5 place-items-center rounded-md border border-[var(--line)] hover:border-[var(--ink)]"><X className="size-3" /></button></span></div>)}</div>}</CardContent></Card>
           <Card className="overflow-hidden bg-[var(--ink)] text-white"><CardContent className="p-5"><div className="flex items-center justify-between"><div className="text-xs font-semibold text-white/55">提交前预评估</div><Sparkles className="size-4 text-[var(--accent)]" /></div><div className="mt-4 flex items-end gap-2"><span className="text-4xl font-bold">{isReady ? result.score : "--"}</span><span className="pb-1 text-xs text-white/45">/ 100 分</span></div><Badge className={cn("mt-3 border-0", !isReady ? "bg-white/10 text-white/65" : result.score >= (product?.handoff_score ?? 82) ? "bg-[#2f7d64] text-white" : result.hardPass ? "bg-[#a07328] text-white" : "bg-[#a94137] text-white")}>{isReady ? result.level : "等待手动输入"}</Badge>{product && <div className="mt-5 space-y-3 border-t border-white/10 pt-4 text-xs"><div className="flex items-center justify-between"><span className="text-white/45">采购价目标</span><span>≤ ¥{product.target_price}</span></div><div className="flex items-center justify-between"><span className="text-white/45">起订量上限</span><span>≤ {product.max_moq} 件</span></div><div className="flex items-center justify-between"><span className="text-white/45">产地匹配</span><span className="flex items-center gap-1"><LocateFixed className="size-3" />{form.region ? (product.preferred_regions.some(region => form.region.includes(region)) ? "优先区域" : "普通区域") : "等待填写"}</span></div></div>}</CardContent></Card>
           <Button type="submit" variant="accent" size="lg" className="w-full" disabled={submitting || !isReady}><Building2 className="size-4" />{submitting ? "正在校验…" : isReady ? "校验并提交方案" : "请先完整填写必填项"}</Button>
           <p className="text-center text-[10px] leading-4 text-[var(--muted)]">提交即表示你确认信息真实。系统会将报价和谈判记录用于本次供应商评估。</p>

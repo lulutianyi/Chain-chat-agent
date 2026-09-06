@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bell, Bot, Building2, ChevronDown, FlaskConical, LayoutDashboard, MessagesSquare } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Bell, Bot, Building2, ChevronDown, FlaskConical, Inbox, LayoutDashboard, MessagesSquare } from "lucide-react";
 import { BrandMark } from "@/components/brand-mark";
+import { getNegotiations, type Negotiation } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const nav = [
@@ -15,6 +17,22 @@ const nav = [
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const [pending, setPending] = useState<Negotiation[]>([]);
+  const [open, setOpen] = useState(false);
+
+  // 铃铛 = 待接管提醒：轮询达到转人工条件、等待商家接管的会话。
+  const loadPending = useCallback(async () => {
+    try {
+      const items = await getNegotiations();
+      setPending(items.filter(item => item.status === "manual_required"));
+    } catch { /* 后端未启动或令牌未配置时静默 */ }
+  }, []);
+  useEffect(() => {
+    void loadPending();
+    const timer = setInterval(() => void loadPending(), 30_000);
+    return () => clearInterval(timer);
+  }, [loadPending]);
+
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[248px_1fr]">
       <aside className="hidden border-r border-white/10 bg-[var(--ink)] text-white lg:flex lg:min-h-screen lg:flex-col lg:p-5">
@@ -39,7 +57,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3 lg:hidden"><BrandMark /><span className="font-bold">链谈 Agent</span></div>
           <div className="hidden items-center gap-2 text-xs text-[var(--muted)] lg:flex"><span className="size-2 rounded-full bg-[var(--success)]" />系统运行正常·AI 防火墙已开启</div>
           <div className="ml-auto flex items-center gap-3">
-            <button aria-label="通知" className="relative grid size-9 place-items-center rounded-xl border border-[var(--line)] bg-white text-[var(--muted)]"><Bell className="size-4" /><span className="absolute right-2 top-2 size-1.5 rounded-full bg-[var(--accent)]" /></button>
+            <div className="relative">
+              <button aria-label="通知" onClick={() => setOpen(current => !current)} className="relative grid size-9 place-items-center rounded-xl border border-[var(--line)] bg-white text-[var(--muted)]">
+                <Bell className="size-4" />
+                {pending.length > 0 && <span className="absolute -right-1 -top-1 grid min-w-4 place-items-center rounded-full bg-[var(--accent)] px-1 text-[9px] font-bold text-white">{pending.length}</span>}
+              </button>
+              {open && <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />}
+              {open && (
+                <div className="absolute right-0 top-11 z-40 w-80 overflow-hidden rounded-2xl border border-[var(--line)] bg-white shadow-2xl">
+                  <div className="border-b border-[var(--line)] px-4 py-3 text-sm font-bold">待接管的优质候选</div>
+                  {pending.length ? <div className="max-h-80 divide-y divide-[var(--line)] overflow-y-auto">{pending.map(item => (
+                    <Link key={item.id} href={`/negotiate?id=${item.id}`} onClick={() => setOpen(false)} className="block px-4 py-3 transition hover:bg-[var(--paper)]">
+                      <div className="flex items-center justify-between gap-2 text-sm font-semibold"><span className="truncate">{item.supplier.company_name}</span><span className="shrink-0 text-xs font-bold text-[var(--accent-strong)]">{item.score} 分</span></div>
+                      <div className="mt-0.5 truncate text-[11px] text-[var(--muted)]">{item.product.name} · 报价 ¥{item.quoted_price} · {item.supplier.region}</div>
+                    </Link>
+                  ))}</div> : <div className="px-4 py-6 text-center text-xs text-[var(--muted)]"><Inbox className="mx-auto mb-2 size-6" />暂无待接管会话，AI 正常工作中</div>}
+                </div>
+              )}
+            </div>
             <button className="flex items-center gap-2 rounded-xl border border-[var(--line)] bg-white px-2 py-1.5 text-sm"><span className="grid size-7 place-items-center rounded-lg bg-[var(--accent-faint)] text-xs font-bold text-[var(--accent-strong)]">鹿</span><span className="hidden sm:block">小鹿生活馆</span><ChevronDown className="size-3.5 text-[var(--muted)]" /></button>
           </div>
         </header>

@@ -33,6 +33,7 @@ export type SupplierOffer = {
   lead_days: number;
   payment_days: number;
   qualifications: string[];
+  qualification_file_ids: string[];
   cooperation_note: string;
   cooperation_rating: number;
 };
@@ -55,9 +56,10 @@ export type ManagedProduct = {
 
 export type DashboardItem = { id: number; supplier: string; product: string; score: number; price: number; moq: number; status: string; classification: string; is_today: boolean };
 export type DashboardSummary = { today_received: number; ai_active: number; qualified: number; minutes_saved: number; items: DashboardItem[] };
+export type QualificationFile = { id: string; original_name: string; content_type: string; size_bytes: number; verified: boolean; uploaded_at: string };
 export type Negotiation = {
   id: number; score: number; classification: string; status: string; quoted_price: number; moq: number; lead_days: number; payment_days: number;
-  hard_fail_reasons: string[]; supplier: { id: number; company_name: string; contact_name: string; region: string; qualifications: string[] };
+  hard_fail_reasons: string[]; supplier: { id: number; company_name: string; contact_name: string; region: string; qualifications: string[]; qualification_files: QualificationFile[] };
   product: { id: number; name: string; category: string; description: string };
   messages: { id: number; sender: "supplier" | "ai" | "human" | "system"; content: string; created_at: string }[];
 };
@@ -81,7 +83,8 @@ export type DialogueEvaluationResult = {
 
 async function request<T>(path: string, init?: RequestInit, auth: AuthMode = "none"): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
-  if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
+  if (init?.body instanceof FormData) delete headers["Content-Type"]; // 让浏览器自带 multipart boundary
+  else if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
   if (auth === "admin" && ADMIN_TOKEN) headers["Authorization"] = `Bearer ${ADMIN_TOKEN}`;
   else if (auth === "supplier") {
     const token = getSupplierToken();
@@ -111,6 +114,19 @@ export function getProductCatalog() { return request<ManagedProduct[]>("/api/pro
 export function getNegotiation(id: number, auth: AuthMode = "supplier") { return request<Negotiation>(`/api/negotiations/${id}`, undefined, auth); }
 export function sendSupplierMessage(id: number, content: string, auth: AuthMode = "supplier") { return request<SupplierReply>(`/api/negotiations/${id}/messages`, { method: "POST", body: JSON.stringify({ content }) }, auth); }
 export function getSupplierNegotiations() { return request<Negotiation[]>("/api/supplier/negotiations", undefined, "supplier"); }
+export function uploadQualificationFile(file: File) {
+  const body = new FormData();
+  body.append("file", file);
+  return request<QualificationFile>("/api/uploads/qualification-files", { method: "POST", body }, "supplier");
+}
+export async function openQualificationFile(fileId: string) {
+  const response = await fetch(`${API_BASE}/api/uploads/${fileId}`, { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } });
+  if (!response.ok) throw new Error("文件读取失败");
+  const url = URL.createObjectURL(await response.blob());
+  window.open(url, "_blank");
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+export function toggleQualificationVerified(fileId: string) { return request<QualificationFile>(`/api/qualification-files/${fileId}/verify`, { method: "POST" }, "admin"); }
 
 // —— 商家侧 ——
 export function handoffNegotiation(negotiationId: number) {
