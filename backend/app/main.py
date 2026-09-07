@@ -5,7 +5,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+import httpx
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
@@ -18,6 +19,7 @@ from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, Dialog
 from app.seed import seed_demo_data
 from app.security import authorize_negotiation, check_code, issue_code, require_admin, require_supplier
 from app.services.llm import FALLBACK_REPLY, generate_negotiation_reply, generate_negotiation_turn
+from app.services.qualification_check import company_matches, read_business_license
 from app.services.rules import enforce_hard_rules
 from app.services.scoring import calculate_supplier_score, classify_supplier
 from app.services.evaluation import LABEL_ZH, dataset_summary, dialogue_cases, dialogue_safety_pass, dialogue_strategy_pass, run_rule_evaluation
@@ -33,9 +35,25 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    _patch_sqlite_columns(engine)
     with SessionLocal() as db:
         seed_demo_data(db)
     yield
+
+
+def _patch_sqlite_columns(engine) -> None:
+    """create_all 只建表不加列：给旧演示库补齐后续新增字段（仅 SQLite 本地库）。"""
+    if engine.dialect.name != "sqlite":
+        return
+    with engine.begin() as conn:
+        columns = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(qualification_files)")]
+        for name, ddl in (
+            ("ocr_status", "VARCHAR(32) DEFAULT 'not_checked'"),
+            ("ocr_company", "VARCHAR(255) DEFAULT ''"),
+            ("ocr_detail", "VARCHAR(500) DEFAULT ''"),
+        ):
+            if name not in columns:
+                conn.exec_driver_sql(f"ALTER TABLE qualification_files ADD COLUMN {name} {ddl}")
 
 
 settings = get_settings()
@@ -148,7 +166,12 @@ def list_supplier_negotiations(db: Session = Depends(get_db), auth: SupplierAuth
 
 
 @app.post("/api/uploads/qualification-files", response_model=QualificationFileOut)
-async def upload_qualification_file(file: UploadFile = File(...), db: Session = Depends(get_db), _auth: SupplierAuth = Depends(require_supplier)):
+async def upload_qualification_file(
+    file: UploadFile = File(...),
+    company_name: str = Form(""),
+    db: Session = Depends(get_db),
+    _auth: SupplierAuth = Depends(require_supplier),
+):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_UPLOAD_SUFFIXES:
         raise HTTPException(status_code=415, detail="仅支持 jpg / jpeg / png / webp 图片或 pdf 文件")
@@ -163,9 +186,31 @@ async def upload_qualification_file(file: UploadFile = File(...), db: Session = 
     (UPLOAD_DIR / stored_name).write_bytes(data)
     original_name = file.filename or stored_name
     content_type = file.content_type or ""
-    db.add(QualificationFile(id=file_id, supplier_id=None, original_name=original_name, stored_name=stored_name, content_type=content_type, size_bytes=len(data)))
+
+    # 资质自动核验：营业执照 OCR 识别公司名并与填写企业名比对；失败/未配置时降级为人工核验。
+    ocr_status, ocr_company, ocr_detail = "not_checked", "", ""
+    settings = get_settings()
+    if not settings.baidu_api_key or not settings.baidu_secret_key:
+        ocr_status, ocr_detail = "unavailable", "识别服务未配置，转人工核验"
+    else:
+        try:
+            result = await read_business_license(data, is_pdf=(suffix == ".pdf"))
+        except (httpx.HTTPError, KeyError, TypeError, ValueError):
+            ocr_status, ocr_detail = "unavailable", "识别服务调用失败，转人工核验"
+        else:
+            ocr_company = (result.get("company") or "").strip()
+            if not ocr_company:
+                ocr_status, ocr_detail = "not_applicable", "未识别出营业执照字段，转人工核验"
+            elif company_matches(ocr_company, company_name):
+                ocr_status, ocr_detail = "passed", f"识别公司名「{ocr_company}」与填写企业名一致"
+            else:
+                ocr_status, ocr_detail = "mismatch", f"识别公司名「{ocr_company}」与填写企业名「{company_name}」不一致"
+
+    row = QualificationFile(id=file_id, supplier_id=None, original_name=original_name, stored_name=stored_name, content_type=content_type, size_bytes=len(data), ocr_status=ocr_status, ocr_company=ocr_company, ocr_detail=ocr_detail)
+    db.add(row)
     db.commit()
-    return QualificationFileOut(id=file_id, original_name=original_name, content_type=content_type, size_bytes=len(data), verified=False, uploaded_at=datetime.utcnow())
+    db.refresh(row)
+    return row
 
 
 @app.get("/api/uploads/{file_id}")

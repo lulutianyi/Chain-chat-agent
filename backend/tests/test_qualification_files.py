@@ -1,6 +1,7 @@
 import tempfile
 from pathlib import Path
 
+import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -29,6 +30,11 @@ def make_client(monkeypatch, upload_dir: Path) -> TestClient:
 
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr(main_module, "UPLOAD_DIR", upload_dir)
+
+    async def fake_ocr(file_bytes, is_pdf=False):
+        return {"company": "鼎盛制造厂", "credit_code": "91440300TEST00000X", "legal_person": "张三"}
+
+    monkeypatch.setattr(main_module, "read_business_license", fake_ocr)
     return TestClient(app)
 
 
@@ -54,10 +60,13 @@ def test_upload_claim_verify_flow(monkeypatch):
     uploaded = client.post(
         "/api/uploads/qualification-files",
         files={"file": ("营业执照.png", b"\x89PNG fake-bytes", "image/png")},
+        data={"company_name": "鼎盛制造厂"},
         headers=headers,
     ).json()
     assert uploaded["verified"] is False
     assert uploaded["original_name"] == "营业执照.png"
+    assert uploaded["ocr_status"] == "passed"  # 识别公司名与填写企业名一致
+    assert "鼎盛制造厂" in uploaded["ocr_detail"]
 
     def payload(file_ids):
         return {
@@ -84,3 +93,46 @@ def test_upload_claim_verify_flow(monkeypatch):
     assert toggled["verified"] is True
 
     assert client.get(f"/api/uploads/{uploaded['id']}").status_code == 401  # 无令牌不可下载
+
+
+def test_ocr_mismatch_and_failure_paths(monkeypatch):
+    upload_dir = Path(tempfile.mkdtemp(prefix="liantan-test-uploads-"))
+    client = make_client(monkeypatch, upload_dir)
+    headers = login_headers(client)
+
+    async def fake_mismatch(file_bytes, is_pdf=False):
+        return {"company": "深圳另一家贸易有限公司", "credit_code": "x", "legal_person": "李四"}
+
+    monkeypatch.setattr(main_module, "read_business_license", fake_mismatch)
+    mismatched = client.post(
+        "/api/uploads/qualification-files",
+        files={"file": ("执照2.png", b"img-2", "image/png")},
+        data={"company_name": "鼎盛制造厂"},
+        headers=headers,
+    ).json()
+    assert mismatched["ocr_status"] == "mismatch"
+    assert "深圳另一家贸易有限公司" in mismatched["ocr_detail"]
+
+    async def failing_ocr(file_bytes, is_pdf=False):
+        raise httpx.ConnectError("network down")
+
+    monkeypatch.setattr(main_module, "read_business_license", failing_ocr)
+    failed = client.post(
+        "/api/uploads/qualification-files",
+        files={"file": ("执照3.png", b"img-3", "image/png")},
+        data={"company_name": "鼎盛制造厂"},
+        headers=headers,
+    ).json()
+    assert failed["ocr_status"] == "unavailable"  # 识别失败降级人工核验，不报 500
+
+    async def not_a_license(file_bytes, is_pdf=False):
+        return {"company": "", "credit_code": "", "legal_person": ""}
+
+    monkeypatch.setattr(main_module, "read_business_license", not_a_license)
+    other = client.post(
+        "/api/uploads/qualification-files",
+        files={"file": ("质检报告.pdf", b"%PDF-fake", "application/pdf")},
+        data={"company_name": "鼎盛制造厂"},
+        headers=headers,
+    ).json()
+    assert other["ocr_status"] == "not_applicable"

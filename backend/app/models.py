@@ -86,6 +86,10 @@ class QualificationFile(Base):
     content_type: Mapped[str] = mapped_column(String(128), default="")
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    # OCR 自动核验结果：not_checked / passed / mismatch / not_applicable / unavailable
+    ocr_status: Mapped[str] = mapped_column(String(32), default="not_checked")
+    ocr_company: Mapped[str] = mapped_column(String(255), default="")
+    ocr_detail: Mapped[str] = mapped_column(String(500), default="")
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

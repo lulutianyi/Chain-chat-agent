@@ -144,6 +144,9 @@ class QualificationFileOut(BaseModel):
     content_type: str
     size_bytes: int
     verified: bool
+    ocr_status: str = "not_checked"
+    ocr_company: str = ""
+    ocr_detail: str = ""
     uploaded_at: datetime
     model_config = ConfigDict(from_attributes=True)
 

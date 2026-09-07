@@ -55,6 +55,11 @@ def make_client(monkeypatch, turn: NegotiationTurn) -> TestClient:
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr(main_module, "UPLOAD_DIR", Path(tempfile.mkdtemp(prefix="liantan-test-uploads-")))
 
+    async def fake_ocr(file_bytes, is_pdf=False):
+        return {"company": "鼎盛制造厂", "credit_code": "x", "legal_person": "张三"}
+
+    monkeypatch.setattr(main_module, "read_business_license", fake_ocr)
+
     async def fake_turn(**kwargs):
         return turn
 

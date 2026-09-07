@@ -56,7 +56,7 @@ export type ManagedProduct = {
 
 export type DashboardItem = { id: number; supplier: string; product: string; score: number; price: number; moq: number; status: string; classification: string; is_today: boolean };
 export type DashboardSummary = { today_received: number; ai_active: number; qualified: number; minutes_saved: number; items: DashboardItem[] };
-export type QualificationFile = { id: string; original_name: string; content_type: string; size_bytes: number; verified: boolean; uploaded_at: string };
+export type QualificationFile = { id: string; original_name: string; content_type: string; size_bytes: number; verified: boolean; ocr_status: string; ocr_company: string; ocr_detail: string; uploaded_at: string };
 export type Negotiation = {
   id: number; score: number; classification: string; status: string; quoted_price: number; moq: number; lead_days: number; payment_days: number;
   hard_fail_reasons: string[]; supplier: { id: number; company_name: string; contact_name: string; region: string; qualifications: string[]; qualification_files: QualificationFile[] };
@@ -114,9 +114,10 @@ export function getProductCatalog() { return request<ManagedProduct[]>("/api/pro
 export function getNegotiation(id: number, auth: AuthMode = "supplier") { return request<Negotiation>(`/api/negotiations/${id}`, undefined, auth); }
 export function sendSupplierMessage(id: number, content: string, auth: AuthMode = "supplier") { return request<SupplierReply>(`/api/negotiations/${id}/messages`, { method: "POST", body: JSON.stringify({ content }) }, auth); }
 export function getSupplierNegotiations() { return request<Negotiation[]>("/api/supplier/negotiations", undefined, "supplier"); }
-export function uploadQualificationFile(file: File) {
+export function uploadQualificationFile(file: File, companyName: string) {
   const body = new FormData();
   body.append("file", file);
+  body.append("company_name", companyName);
   return request<QualificationFile>("/api/uploads/qualification-files", { method: "POST", body }, "supplier");
 }
 export async function openQualificationFile(fileId: string) {
