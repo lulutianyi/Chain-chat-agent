@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, ArrowUp, Bot, Inbox, Loader2, Lock, UserRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,8 @@ export default function SupplierChatPage() {
   const [error, setError] = useState("");
 
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const idParam = searchParams.get("id");
 
   useEffect(() => {
     if (!getSupplierToken()) {
@@ -31,22 +33,22 @@ export default function SupplierChatPage() {
   }, [router]);
 
   const load = useCallback(async (id?: number) => {
-    const target = id ?? Number(new URLSearchParams(window.location.search).get("id") || 0);
+    const target = id ?? Number(idParam || 0);
     if (!target) {
       // URL 上没有会话编号时，列出登录手机号名下的全部会话，供供应商找回历史洽谈。
       try { setSessions(await getSupplierNegotiations()); } catch (e) { setError(e instanceof Error ? e.message : "无法读取洽谈会话"); } finally { setLoading(false); }
       return;
     }
     try { setNegotiation(await getNegotiation(target)); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "无法读取谈判会话"); } finally { setLoading(false); }
-  }, []);
+  }, [idParam]);
 
-  useEffect(() => { void load(); }, [load]);
+  // 首次挂载、以及 URL 中 id 变化时（例如在「我的洽谈」下拉里切换会话）重新加载。
+  useEffect(() => { setLoading(true); void load(); }, [load]);
 
   function open(id: number) {
     setLoading(true);
     setSessions(null);
-    window.history.replaceState(null, "", `/supplier/chat?id=${id}`);
-    void load(id);
+    router.replace(`/supplier/chat?id=${id}`);
   }
 
   const canSend = Boolean(negotiation && negotiation.status === "ai_active" && negotiation.classification === "negotiating");
@@ -54,7 +56,7 @@ export default function SupplierChatPage() {
   async function submit() {
     if (!negotiation || !draft.trim() || !canSend || sending) return;
     setSending(true);
-    try { await sendSupplierMessage(negotiation.id, draft.trim()); setDraft(""); await load(); } catch (err) { setError(err instanceof Error ? err.message : "发送失败"); } finally { setSending(false); }
+    try { await sendSupplierMessage(negotiation.id, draft.trim()); setDraft(""); await load(negotiation.id); } catch (err) { setError(err instanceof Error ? err.message : "发送失败"); } finally { setSending(false); }
   }
 
   if (loading) return <div className="py-20 text-center text-sm text-[var(--muted)]">正在读取洽谈会话…</div>;

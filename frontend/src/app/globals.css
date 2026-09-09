@@ -35,7 +35,7 @@ button { cursor: pointer; }
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.animate-rise { animation: rise .45s ease-out both; }
+.animate-rise { animation: rise .45s ease-out backwards; }
 .dot-grid {
   background-image: radial-gradient(rgba(24, 35, 31, .12) .65px, transparent .65px);
   background-size: 10px 10px;
