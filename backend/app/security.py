@@ -4,6 +4,9 @@
 供应商身份通过 access_token 绑定手机号，谈判会话的归属以 supplier.phone 判定。
 """
 
+import hashlib
+import hmac
+import re
 import secrets
 import time
 
@@ -13,7 +16,36 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
-from app.models import SupplierAuth
+from app.models import MerchantAccount, SupplierAuth
+
+_PBKDF2_ITERATIONS = 200_000
+
+
+def hash_password(password: str) -> str:
+    """PBKDF2-SHA256 加盐哈希，返回 "salt$hex"。标准库实现，不引入额外依赖。"""
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), _PBKDF2_ITERATIONS).hex()
+    return f"{salt}${digest}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        salt, digest = stored.split("$", 1)
+    except ValueError:
+        return False
+    candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), _PBKDF2_ITERATIONS).hex()
+    return hmac.compare_digest(candidate, digest)
+
+
+def validate_password(password: str) -> str | None:
+    """校验采购方密码：长度 > 8 字符，且同时包含英文字母、数字。合法返回 None，否则返回错误信息。"""
+    if len(password) <= 8:
+        return "密码长度需大于 8 个字符"
+    if not re.search(r"[a-zA-Z]", password):
+        return "密码需至少包含一个英文字母"
+    if not re.search(r"[0-9]", password):
+        return "密码需至少包含一个数字"
+    return None
 
 OTP_TTL_SECONDS = 300
 # phone -> (code, expires_at)。演示用途，进程内存储，重启即失效。
@@ -51,12 +83,28 @@ def _extract_bearer(authorization: str | None) -> str | None:
     return token.strip() if scheme.lower() == "bearer" and token else None
 
 
-def require_admin(authorization: str | None = Header(default=None)) -> str:
+def require_admin(db: Session = Depends(get_db), authorization: str | None = Header(default=None)) -> str:
+    """商家侧鉴权：接受环境 admin_token（网页调试），或采购方登录后的商家 access_token。"""
     token = _extract_bearer(authorization)
-    expected = get_settings().admin_token
-    if not expected or not token or token != expected:
+    if not token:
         raise HTTPException(status_code=401, detail="需要管理员身份")
-    return token
+    expected = get_settings().admin_token
+    if expected and token == expected:
+        return token
+    if db.scalar(select(MerchantAccount.id).where(MerchantAccount.access_token == token)):
+        return token
+    raise HTTPException(status_code=401, detail="需要管理员身份")
+
+
+def require_buyer(db: Session = Depends(get_db), authorization: str | None = Header(default=None)) -> MerchantAccount:
+    """采购方登录鉴权：仅接受商家 access_token，返回对应账号行。"""
+    token = _extract_bearer(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="请先登录采购方账号")
+    account = db.scalar(select(MerchantAccount).where(MerchantAccount.access_token == token))
+    if account is None:
+        raise HTTPException(status_code=401, detail="登录已失效，请重新登录")
+    return account
 
 
 def require_supplier(db: Session = Depends(get_db), authorization: str | None = Header(default=None)) -> SupplierAuth:

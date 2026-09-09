@@ -177,7 +177,7 @@ class NegotiationOut(BaseModel):
 
 
 class SupplierCodeRequest(BaseModel):
-    phone: str = Field(min_length=6, max_length=40)
+    phone: str = Field(min_length=11, max_length=11, pattern=r"^\d{11}$")
 
 
 class SupplierCodeOut(BaseModel):
@@ -187,10 +187,39 @@ class SupplierCodeOut(BaseModel):
 
 
 class SupplierLoginRequest(BaseModel):
-    phone: str = Field(min_length=6, max_length=40)
+    phone: str = Field(min_length=11, max_length=11, pattern=r"^\d{11}$")
     code: str = Field(min_length=6, max_length=6)
 
 
 class SupplierTokenOut(BaseModel):
     access_token: str
     phone: str
+
+
+class MerchantLoginIn(BaseModel):
+    password: str = Field(min_length=1, max_length=200)
+
+
+class MerchantPasswordIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=1, max_length=200)
+
+
+class MerchantProfileIn(BaseModel):
+    store_name: str = Field(min_length=1, max_length=120)
+    logo_emoji: str = Field(default="", max_length=16)
+    logo_image: str = Field(default="", max_length=2_000_000)
+    contact: str = Field(default="", max_length=80)
+    category: str = Field(default="", max_length=255)
+
+
+class MerchantProfileOut(BaseModel):
+    store_name: str
+    logo_emoji: str
+    logo_image: str
+    contact: str
+    category: str
+
+
+class MerchantTokenOut(MerchantProfileOut):
+    access_token: str

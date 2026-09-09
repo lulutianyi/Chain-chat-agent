@@ -113,3 +113,18 @@ class SupplierAuth(Base):
     access_token: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_login_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MerchantAccount(Base):
+    """采购方（商家）账号：单商家演示，仅一行。密码哈希 + 登录令牌 + 个人资料。"""
+
+    __tablename__ = "merchant_accounts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    store_name: Mapped[str] = mapped_column(String(120), default="小鹿生活馆")
+    logo_emoji: Mapped[str] = mapped_column(String(16), default="🦌")
+    logo_image: Mapped[str] = mapped_column(Text, default="")
+    contact: Mapped[str] = mapped_column(String(80), default="")
+    category: Mapped[str] = mapped_column(String(255), default="")
+    password_hash: Mapped[str] = mapped_column(String(255), default="")
+    access_token: Mapped[str | None] = mapped_column(String(80), nullable=True)
