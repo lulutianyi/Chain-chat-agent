@@ -18,10 +18,11 @@ from app.models import MerchantAccount, Message, Negotiation, ProcurementRule, P
 from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, DialogueEvaluationIn, EvaluationOut, MerchantLoginIn, MerchantPasswordIn, MerchantProfileIn, MerchantProfileOut, MerchantTokenOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, QualificationFileOut, RuleOut, RuleUpdate, SupplierCodeOut, SupplierCodeRequest, SupplierLoginRequest, SupplierOfferIn, SupplierTokenOut
 from app.seed import seed_demo_data, seed_merchant_account
 from app.security import authorize_negotiation, check_code, hash_password, issue_code, require_admin, require_buyer, require_supplier, validate_password, verify_password
-from app.services.llm import FALLBACK_REPLY, generate_negotiation_reply, generate_negotiation_turn
+from app.services.llm import FALLBACK_REPLY, generate_negotiation_reply, generate_negotiation_turn, generate_opening_message
 from app.services.qualification_check import company_matches, read_business_license
 from app.services.rules import enforce_hard_rules
 from app.services.scoring import calculate_supplier_score, classify_supplier
+from app.services.term_extraction import extract_supplier_terms
 from app.services.evaluation import LABEL_ZH, dataset_summary, dialogue_cases, dialogue_safety_pass, dialogue_strategy_pass, run_rule_evaluation
 
 POLITE_CLOSE_REPLY = "感谢您提供资料。当前供货条件与我们的采购要求暂不匹配，本次暂不继续洽谈。"
@@ -89,7 +90,7 @@ def evaluate_terms(rule: ProcurementRule, *, quoted_price: float, moq: int, lead
         lead_days=lead_days,
         max_lead_days=rule.max_lead_days,
         payment_days=payment_days,
-        max_payment_days=rule.max_payment_days,
+        min_payment_days=rule.max_payment_days,
         qualifications=qualifications,
         required_qualifications=rule.required_qualifications,
     )
@@ -103,8 +104,11 @@ def evaluate_terms(rule: ProcurementRule, *, quoted_price: float, moq: int, lead
         region=region,
         preferred_regions=rule.preferred_regions,
         cooperation_rating=cooperation_rating,
+        hard_max_price=rule.hard_max_price,
+        lead_days=lead_days,
+        max_lead_days=rule.max_lead_days,
         payment_days=payment_days,
-        max_payment_days=rule.max_payment_days,
+        min_payment_days=rule.max_payment_days,
     )
     classification, action = classify_supplier(hard_pass=hard.passed, score=scored.total, handoff_score=rule.handoff_score)
     return hard, scored, classification, action
@@ -463,7 +467,7 @@ def update_rule(product_id: int, payload: RuleUpdate, db: Session = Depends(get_
 
 
 @app.post("/api/suppliers/evaluate", response_model=EvaluationOut)
-def evaluate_supplier(payload: SupplierOfferIn, db: Session = Depends(get_db), auth: SupplierAuth = Depends(require_supplier)):
+async def evaluate_supplier(payload: SupplierOfferIn, db: Session = Depends(get_db), auth: SupplierAuth = Depends(require_supplier)):
     payload.phone = auth.phone  # 身份以登录手机号为准，忽略表单传入的 phone
     rule = db.scalar(select(ProcurementRule).where(ProcurementRule.product_id == payload.product_id, ProcurementRule.active.is_(True)))
     if rule is None:
@@ -502,6 +506,25 @@ def evaluate_supplier(payload: SupplierOfferIn, db: Session = Depends(get_db), a
         hard_fail_reasons=hard.reasons,
     )
     db.add(negotiation)
+    db.flush()
+    if classification == "negotiating":
+        opening = await generate_opening_message(
+            supplier_name=payload.company_name,
+            product_name=rule.product.name,
+            quoted_price=payload.quoted_price,
+            target_price=rule.target_price,
+            moq=payload.moq,
+            max_moq=rule.max_moq,
+            lead_days=payload.lead_days,
+            max_lead_days=rule.max_lead_days,
+            payment_days=payload.payment_days,
+            min_payment_days=rule.max_payment_days,
+        )
+        db.add(Message(negotiation_id=negotiation.id, sender="ai", content=opening))
+    elif classification == "qualified":
+        db.add(Message(negotiation_id=negotiation.id, sender="ai", content="感谢您提交方案，整体条件与我们的采购需求较为匹配。我们已邀请采购负责人接手，接下来将由人工与您进一步协商合作细节。"))
+    else:
+        db.add(Message(negotiation_id=negotiation.id, sender="ai", content=POLITE_CLOSE_REPLY))
     db.commit()
     db.refresh(negotiation)
     return EvaluationOut(
@@ -535,7 +558,8 @@ async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Sessio
         {"role": "user" if m.sender == "supplier" else "assistant", "content": m.content}
         for m in negotiation.messages
         if m.sender in {"supplier", "ai"}
-    ]
+    ][-10:]
+    local_terms = extract_supplier_terms(payload.content)
     db.add(Message(negotiation_id=negotiation.id, sender="supplier", content=payload.content))
 
     # 人工接管或优质候选状态下，程序层硬性禁止 LLM 自动回复。
@@ -550,31 +574,68 @@ async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Sessio
         return ChatOut(negotiation_id=negotiation.id, status="closed", assistant_message=POLITE_CLOSE_REPLY, handoff_required=False, classification="eliminated", score=negotiation.score)
 
     rule = db.scalar(select(ProcurementRule).where(ProcurementRule.product_id == negotiation.product_id, ProcurementRule.active.is_(True)))
+    decision_context = f"继续 AI 议价；当前评分 {negotiation.score}；禁止做出下单或付款承诺。"
+    if rule is not None:
+        detected = []
+        if local_terms.quoted_price is not None:
+            detected.append(f"报价 ¥{local_terms.quoted_price:g}")
+        if local_terms.moq is not None:
+            detected.append(f"起订量 {local_terms.moq} 件")
+        if local_terms.lead_days is not None:
+            detected.append(f"交期 {local_terms.lead_days} 天")
+        if local_terms.payment_days is not None:
+            detected.append(f"账期 {local_terms.payment_days} 天")
+        decision_context += (
+            f" 当前条款：报价 ¥{negotiation.quoted_price:g}（目标 ¥{rule.target_price:g}）、"
+            f"起订量 {negotiation.moq}（上限 {rule.max_moq}）、交期 {negotiation.lead_days} 天（上限 {rule.max_lead_days}）、"
+            f"账期 {negotiation.payment_days} 天（最低期望 {rule.max_payment_days}）。"
+            "先认可供应商已做出的让步，再选择差距较大的一至两项委婉协商。"
+        )
+        if detected:
+            decision_context += f" 本轮本地程序已确认供应商明确提出：{'、'.join(detected)}；回复必须以这些新条款为准。"
+        effective_price = local_terms.quoted_price if local_terms.quoted_price is not None else negotiation.quoted_price
+        effective_moq = local_terms.moq if local_terms.moq is not None else negotiation.moq
+        effective_lead = local_terms.lead_days if local_terms.lead_days is not None else negotiation.lead_days
+        effective_payment = local_terms.payment_days if local_terms.payment_days is not None else negotiation.payment_days
+        remaining = []
+        achieved = []
+        (remaining if effective_price > rule.target_price else achieved).append("价格")
+        (remaining if effective_moq > rule.max_moq * 0.5 else achieved).append("起订量")
+        (remaining if effective_lead > rule.max_lead_days * 0.5 else achieved).append("交期")
+        (remaining if effective_payment < rule.max_payment_days else achieved).append("账期")
+        decision_context += f" 尚有优化空间：{'、'.join(remaining) or '无'}；已经达到目标、禁止重复追问：{'、'.join(achieved) or '无'}。"
     turn = await generate_negotiation_turn(
         supplier_message=payload.content,
-        decision_context=f"继续 AI 议价；当前评分 {negotiation.score}；禁止做出下单或付款承诺。",
+        decision_context=decision_context,
         history=history,
         extract_terms=rule is not None,
     )
     reply = turn.reply
     handoff_required = False
 
+    # 本地确定性解析优先于模型抽取；模型仅补充本地没有识别到的字段。
+    quoted_price = local_terms.quoted_price if local_terms.quoted_price is not None else turn.quoted_price
+    moq = local_terms.moq if local_terms.moq is not None else turn.moq
+    lead_days = local_terms.lead_days if local_terms.lead_days is not None else turn.lead_days
+    payment_days = local_terms.payment_days if local_terms.payment_days is not None else turn.payment_days
+    terms_recognized = any(value is not None for value in (quoted_price, moq, lead_days, payment_days))
+
     # 供应商在对话中给出明确新条款时，程序重新执行底线校验与评分；AI 只转述条款，不做决策。
     updates = []
-    if turn.quoted_price is not None and float(turn.quoted_price) != negotiation.quoted_price:
-        negotiation.quoted_price = float(turn.quoted_price)
-        updates.append(f"报价 ¥{turn.quoted_price:g}/件")
-    if turn.moq is not None and int(turn.moq) != negotiation.moq:
-        negotiation.moq = int(turn.moq)
-        updates.append(f"起订量 {turn.moq} 件")
-    if turn.lead_days is not None and int(turn.lead_days) != negotiation.lead_days:
-        negotiation.lead_days = int(turn.lead_days)
-        updates.append(f"交期 {turn.lead_days} 天")
-    if turn.payment_days is not None and int(turn.payment_days) != negotiation.payment_days:
-        negotiation.payment_days = int(turn.payment_days)
-        updates.append(f"账期 {turn.payment_days} 天")
+    if quoted_price is not None and float(quoted_price) != negotiation.quoted_price:
+        negotiation.quoted_price = float(quoted_price)
+        updates.append(f"报价 ¥{quoted_price:g}/件")
+    if moq is not None and int(moq) != negotiation.moq:
+        negotiation.moq = int(moq)
+        updates.append(f"起订量 {moq} 件")
+    if lead_days is not None and int(lead_days) != negotiation.lead_days:
+        negotiation.lead_days = int(lead_days)
+        updates.append(f"交期 {lead_days} 天")
+    if payment_days is not None and int(payment_days) != negotiation.payment_days:
+        negotiation.payment_days = int(payment_days)
+        updates.append(f"账期 {payment_days} 天")
 
-    if rule is not None and updates:
+    if rule is not None and terms_recognized:
         previous_score = negotiation.score
         supplier = negotiation.supplier
         hard, scored, classification, _ = evaluate_terms(
@@ -590,7 +651,8 @@ async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Sessio
         negotiation.score = scored.total
         negotiation.hard_fail_reasons = hard.reasons
         negotiation.classification = classification
-        db.add(Message(negotiation_id=negotiation.id, sender="system", content=f"供应商更新条件（{'、'.join(updates)}），程序重新校验评分：{previous_score} → {scored.total}，分类调整为「{LABEL_ZH[classification]}」。"))
+        terms_note = "、".join(updates) if updates else "明确条款与当前记录一致"
+        db.add(Message(negotiation_id=negotiation.id, sender="system", content=f"供应商更新或确认条件（{terms_note}），程序重新校验评分：{previous_score} → {scored.total}，分类调整为「{LABEL_ZH[classification]}」。"))
         if classification == "eliminated":
             negotiation.status = "closed"
             reply = POLITE_CLOSE_REPLY

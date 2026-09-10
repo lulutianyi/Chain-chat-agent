@@ -72,31 +72,35 @@ export default function SupplierPage() {
     getProductCatalog().then(items => { setProducts(items); setProductId(items[0]?.id ?? null); }).catch(() => setProducts([])).finally(() => setProductsLoading(false));
   }, []);
 
-  // 与后端 calculate_supplier_score 完全同口径的预评估：价格按比率扣分、起订量按比率扣分、
-  // 资质按必备清单比例给分、配合度 = 沟通评分/20 + 账期达标 5 分；硬规则不过时不再封顶，
-  // 直接展示真实得分并列出不通过原因。
+  // 与后端同口径预评估。硬规则先决定能否进入谈判，分数只决定 AI 继续谈或转人工。
   const result = useMemo(() => {
     if (!isReady || !product) return { hardPass: false, score: 0, level: "等待输入", hardFailReasons: [] as string[] };
     const price = Number(form.price || 0);
     const moq = Number(form.moq || 0);
+    const leadDays = Number(form.leadTime || 0);
     const payment = Number(form.payment || 0);
     const rating = form.cooperation.length > 24 ? 90 : 60;
     const reasons: string[] = [];
     if (price > product.hard_max_price) reasons.push(`报价 ¥${price} 超过硬性上限 ¥${product.hard_max_price}`);
     if (moq > product.max_moq) reasons.push(`起订量 ${moq} 件超过上限 ${product.max_moq} 件`);
+    if (leadDays > product.max_lead_days) reasons.push(`交期 ${leadDays} 天超过上限 ${product.max_lead_days} 天`);
+    if (payment < product.max_payment_days) reasons.push(`账期 ${payment} 天低于最低要求 ${product.max_payment_days} 天`);
     const missing = product.required_qualifications.filter(item => !qualifications.includes(item));
     if (missing.length) reasons.push(`缺少必备资质：${missing.join("、")}`);
     const hardPass = reasons.length === 0;
 
-    const priceRatio = product.target_price > 0 ? price / product.target_price : 0;
-    const priceScore = priceRatio <= 1 ? 35 : Math.max(0, pythonRound(35 - (priceRatio - 1) * 70));
+    const priceSpan = Math.max(0, product.hard_max_price - product.target_price);
+    const priceScore = price <= product.target_price ? 30 : priceSpan === 0 ? 12 : Math.max(0, pythonRound(30 - 18 * (price - product.target_price) / priceSpan));
     const moqRatio = product.max_moq > 0 ? moq / product.max_moq : 0;
-    const moqScore = moqRatio <= 0.5 ? 20 : Math.max(0, pythonRound(20 - (moqRatio - 0.5) * 20));
+    const moqScore = moqRatio <= 0.5 ? 15 : Math.max(0, pythonRound(15 - (moqRatio - 0.5) * 18));
     const required = product.required_qualifications;
-    const qualScore = required.length === 0 ? 25 : pythonRound(25 * required.filter(item => qualifications.includes(item)).length / required.length);
-    const regionScore = product.preferred_regions.some(region => form.region.includes(region)) ? 10 : 5;
-    const cooperationScore = pythonRound(rating / 20) + (payment <= product.max_payment_days ? 5 : 0);
-    const score = priceScore + moqScore + qualScore + regionScore + cooperationScore;
+    const qualScore = required.length === 0 ? 20 : pythonRound(20 * required.filter(item => qualifications.includes(item)).length / required.length);
+    const leadRatio = product.max_lead_days > 0 ? leadDays / product.max_lead_days : 0;
+    const deliveryScore = product.max_lead_days <= 0 || leadRatio <= 0.5 ? 10 : Math.max(0, pythonRound(10 - (leadRatio - 0.5) * 10));
+    const paymentScore = product.max_payment_days <= 0 ? 10 : payment < product.max_payment_days ? Math.max(0, pythonRound(7 * payment / product.max_payment_days)) : Math.min(10, pythonRound(7 + 3 * (payment - product.max_payment_days) / product.max_payment_days));
+    const regionScore = product.preferred_regions.length === 0 || product.preferred_regions.some(region => form.region.includes(region)) ? 5 : 3;
+    const cooperationScore = pythonRound(rating / 10);
+    const score = priceScore + moqScore + qualScore + deliveryScore + paymentScore + regionScore + cooperationScore;
     return { hardPass, score, level: !hardPass ? "不匹配" : score >= product.handoff_score ? "优质候选" : "可进入议价", hardFailReasons: reasons };
   }, [form, isReady, product, qualifications]);
   const displayResult = serverResult ?? result;
@@ -142,7 +146,7 @@ export default function SupplierPage() {
       setSubmitting(false);
       setSubmitted(true);
     }
-  }, [form, product, qualifications, result]);
+  }, [form, product, qualifications, qualFiles, result]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -175,7 +179,7 @@ export default function SupplierPage() {
   }, [evaluateAndSubmit, form.company, form.moq, form.price, isReady, product?.name, result.level, result.score]);
 
   if (submitted) {
-    return <div className="animate-rise mx-auto max-w-3xl py-8 sm:py-16"><Card className="overflow-hidden"><div className="h-2 bg-[var(--accent)]" /><CardContent className="p-7 sm:p-10"><div className={cn("grid size-14 place-items-center rounded-2xl", displayResult.hardPass ? "bg-[var(--success-faint)] text-[var(--success)]" : "bg-[var(--danger-faint)] text-[var(--danger)]")}>{displayResult.hardPass ? <CheckCircle2 className="size-7" /> : <XCircle className="size-7" />}</div><Badge className={cn("mt-6", displayResult.score >= 82 ? "border-[var(--success)]/20 bg-[var(--success-faint)] text-[var(--success)]" : displayResult.hardPass ? "border-[var(--warning)]/20 bg-[var(--warning-faint)] text-[var(--warning)]" : "border-[var(--danger)]/20 bg-[var(--danger-faint)] text-[var(--danger)]")}>{displayResult.level}·{displayResult.score} 分</Badge><h1 className="mt-4 text-3xl font-bold tracking-tight">{displayResult.hardPass ? "资料已通过底线校验" : "当前条件与采购需求不匹配"}</h1><p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--muted)]">{displayResult.score >= 82 ? "你的报价、起订量、资质和配合方案综合表现良好。系统已停止自动承诺，并提醒店长进入深度沟通。" : displayResult.hardPass ? "资料已入库，AI 将围绕价格、起订量与交付条款继续洽谈。在评分达到人工阈值前，不会打扰店长。" : "系统根据采购方的硬性规则停止了本次洽谈。你可调整起订量、补齐资质或优化报价后重新提交。"}</p>
+    return <div className="animate-rise mx-auto max-w-3xl py-8 sm:py-16"><Card className="overflow-hidden"><div className="h-2 bg-[var(--accent)]" /><CardContent className="p-7 sm:p-10"><div className={cn("grid size-14 place-items-center rounded-2xl", displayResult.hardPass ? "bg-[var(--success-faint)] text-[var(--success)]" : "bg-[var(--danger-faint)] text-[var(--danger)]")}>{displayResult.hardPass ? <CheckCircle2 className="size-7" /> : <XCircle className="size-7" />}</div><Badge className={cn("mt-6", displayResult.hardPass && displayResult.score >= (product?.handoff_score ?? 82) ? "border-[var(--success)]/20 bg-[var(--success-faint)] text-[var(--success)]" : displayResult.hardPass ? "border-[var(--warning)]/20 bg-[var(--warning-faint)] text-[var(--warning)]" : "border-[var(--danger)]/20 bg-[var(--danger-faint)] text-[var(--danger)]")}>{displayResult.level}·{displayResult.score} 分</Badge><h1 className="mt-4 text-3xl font-bold tracking-tight">{displayResult.hardPass ? "资料已通过底线校验" : "当前条件与采购需求不匹配"}</h1><p className="mt-3 max-w-2xl text-sm leading-7 text-[var(--muted)]">{displayResult.hardPass && displayResult.score >= (product?.handoff_score ?? 82) ? "你的报价、起订量、资质和配合方案综合表现良好。系统已停止自动承诺，并提醒店长进入深度沟通。" : displayResult.hardPass ? "资料已入库，AI 将围绕价格、起订量与交付条款继续洽谈。在评分达到人工阈值前，不会打扰店长。" : "系统根据采购方的硬性规则停止了本次洽谈。你可调整起订量、补齐资质或优化报价后重新提交。"}</p>
         {!!displayResult.hardFailReasons?.length && !displayResult.hardPass && <div className="mt-5 rounded-2xl border border-[var(--danger)]/20 bg-[var(--danger-faint)] p-4"><div className="text-sm font-bold text-[var(--danger)]">未通过项（硬性底线一票否决）</div><div className="mt-2 space-y-1.5 text-sm leading-6 text-[var(--danger)]">{displayResult.hardFailReasons.map(reason => <div key={reason}>· {reason}</div>)}</div></div>}
         <div className={cn("mt-5 rounded-xl px-3 py-2 text-xs", apiStatus === "saved" ? "bg-[var(--success-faint)] text-[var(--success)]" : "bg-[var(--warning-faint)] text-[var(--warning)]")}>{apiStatus === "saved" ? "已写入供应商与谈判记录库" : "当前为前端演示结果；启动后端后将自动写入数据库"}</div>
         <div className="mt-7 grid gap-3 sm:grid-cols-3"><div className="rounded-xl bg-[var(--paper)] p-4"><div className="text-xs text-[var(--muted)]">报价</div><div className="mt-1 font-bold">¥{form.price} / 件</div></div><div className="rounded-xl bg-[var(--paper)] p-4"><div className="text-xs text-[var(--muted)]">起订量</div><div className="mt-1 font-bold">{form.moq} 件</div></div><div className="rounded-xl bg-[var(--paper)] p-4"><div className="text-xs text-[var(--muted)]">资质完整度</div><div className="mt-1 font-bold">{qualifications.length} / 3</div></div></div>

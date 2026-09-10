@@ -18,23 +18,43 @@ def calculate_supplier_score(
     region: str,
     preferred_regions: list[str],
     cooperation_rating: int,
+    hard_max_price: float | None = None,
+    lead_days: int = 0,
+    max_lead_days: int = 0,
     payment_days: int = 0,
-    max_payment_days: int = 0,
+    min_payment_days: int = 0,
 ) -> ScoreResult:
-    """100 分加权评分：价格 35，起订 20，资质 25，区域 10，账期与配合度 10。"""
-    price_ratio = quoted_price / target_price
-    price = 35 if price_ratio <= 1 else max(0, round(35 - (price_ratio - 1) * 70))
+    """硬规则通过后的 100 分适配度：价格30、起订15、资质20、交期10、账期10、区域5、配合度10。"""
+    price_ceiling = max(target_price, hard_max_price or target_price * 1.25)
+    if quoted_price <= target_price:
+        price = 30
+    elif price_ceiling <= target_price:
+        price = 12
+    else:
+        price = max(0, round(30 - 18 * (quoted_price - target_price) / (price_ceiling - target_price)))
     moq_ratio = moq / max_moq
-    moq_score = 20 if moq_ratio <= 0.5 else max(0, round(20 - (moq_ratio - 0.5) * 20))
+    moq_score = 15 if moq_ratio <= 0.5 else max(0, round(15 - (moq_ratio - 0.5) * 18))
     required = set(required_qualifications)
-    qualification = 25 if not required else round(25 * len(required & set(qualifications)) / len(required))
-    region_score = 10 if any(preferred in region for preferred in preferred_regions) else 5
-    payment_score = 5 if payment_days <= max_payment_days else 0
-    cooperation = round(max(0, min(100, cooperation_rating)) / 20) + payment_score
+    qualification = 20 if not required else round(20 * len(required & set(qualifications)) / len(required))
+    if max_lead_days <= 0:
+        delivery = 10
+    else:
+        delivery_ratio = lead_days / max_lead_days
+        delivery = 10 if delivery_ratio <= 0.5 else max(0, round(10 - (delivery_ratio - 0.5) * 10))
+    if min_payment_days <= 0:
+        payment = 10
+    elif payment_days < min_payment_days:
+        payment = max(0, round(7 * payment_days / min_payment_days))
+    else:
+        payment = min(10, round(7 + 3 * (payment_days - min_payment_days) / min_payment_days))
+    region_score = 5 if not preferred_regions or any(preferred in region for preferred in preferred_regions) else 3
+    cooperation = round(max(0, min(100, cooperation_rating)) / 10)
     breakdown = {
         "price": price,
         "moq": moq_score,
         "qualification": qualification,
+        "delivery": delivery,
+        "payment": payment,
         "region": region_score,
         "cooperation": cooperation,
     }
@@ -42,6 +62,7 @@ def calculate_supplier_score(
 
 
 def classify_supplier(*, hard_pass: bool, score: int, handoff_score: int) -> tuple[str, str]:
+    """硬规则拥有最高优先级；通过后，达阈值转人工，其余由 AI 继续谈。"""
     if not hard_pass:
         return "eliminated", "polite_close"
     if score >= handoff_score:

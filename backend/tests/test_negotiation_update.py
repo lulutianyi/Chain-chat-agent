@@ -11,6 +11,7 @@ from app.database import Base, get_db
 from app.main import app
 from app.seed import seed_demo_data
 from app.services.llm import NegotiationTurn, parse_negotiation_turn
+from app.services.term_extraction import extract_supplier_terms
 
 ADMIN_HEADERS = {"Authorization": "Bearer lantan-admin-demo-2025"}
 PHONE = "13900000000"
@@ -40,6 +41,24 @@ def test_parse_negotiation_turn_survives_plain_text_and_garbage():
     assert broken.reply  # 无有效条款时整段文本按回复处理，不更新条款
 
 
+def test_parse_negotiation_turn_accepts_numeric_strings_with_units():
+    turn = parse_negotiation_turn('{"reply":"收到","quoted_price":"51元/件","moq":"60件","lead_days":null,"payment_days":"30天"}')
+    assert (turn.quoted_price, turn.moq, turn.payment_days) == (51.0, 60, 30)
+
+
+def test_local_extractor_handles_common_supplier_phrases():
+    terms = extract_supplier_terms("可以，我们把价格从54元调整到51元吧，起订量改为60件，账期30天不变，7天交货。")
+    assert terms.quoted_price == 51
+    assert terms.moq == 60
+    assert terms.payment_days == 30
+    assert terms.lead_days == 7
+
+
+def test_local_extractor_ignores_rejected_number():
+    terms = extract_supplier_terms("50元不行，我们最低只能做到51元。")
+    assert terms.quoted_price == 51
+
+
 def make_client(monkeypatch, turn: NegotiationTurn) -> TestClient:
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
@@ -63,7 +82,11 @@ def make_client(monkeypatch, turn: NegotiationTurn) -> TestClient:
     async def fake_turn(**kwargs):
         return turn
 
+    async def fake_opening(**kwargs):
+        return "您好，感谢提交方案，我们想继续商量合作条件。"
+
     monkeypatch.setattr(main_module, "generate_negotiation_turn", fake_turn)
+    monkeypatch.setattr(main_module, "generate_opening_message", fake_opening)
     return TestClient(app)
 
 
@@ -89,19 +112,19 @@ def submit_offer(client: TestClient, headers: dict) -> dict:
 
 
 def test_concession_updates_score_and_triggers_handoff(monkeypatch):
-    turn = NegotiationTurn(reply="可以接受，21 元 100 件，账期 15 天。", quoted_price=21.0, moq=100, payment_days=15)
+    turn = NegotiationTurn(reply="可以接受，21 元 100 件，账期 45 天。", quoted_price=21.0, moq=100, payment_days=45)
     client = make_client(monkeypatch, turn)
     headers = login_headers(client)
     result = submit_offer(client, headers)
     assert result["classification"] == "negotiating"
-    assert result["score"] == 77
+    assert result["score"] < 82
 
     chat = client.post(
         f"/api/negotiations/{result['negotiation_id']}/messages",
-        json={"content": "21 元的话，100 件起订，账期 15 天。"},
+        json={"content": "21 元的话，100 件起订，账期 45 天。"},
         headers=headers,
     ).json()
-    assert chat["score"] == 90
+    assert chat["score"] >= 82
     assert chat["classification"] == "qualified"
     assert chat["status"] == "manual_required"
     assert chat["handoff_required"] is True
@@ -115,6 +138,36 @@ def test_concession_updates_score_and_triggers_handoff(monkeypatch):
 
     detail = client.get(f"/api/negotiations/{result['negotiation_id']}", headers=ADMIN_HEADERS).json()
     assert any("重新校验评分" in message["content"] for message in detail["messages"])
+
+
+def test_local_terms_recalculate_when_model_returns_plain_reply(monkeypatch):
+    client = make_client(monkeypatch, NegotiationTurn(reply="谢谢您的调整，我们继续沟通。"))
+    headers = login_headers(client)
+    result = submit_offer(client, headers)
+    original_score = result["score"]
+
+    client.post(
+        f"/api/negotiations/{result['negotiation_id']}/messages",
+        json={"content": "好的，报价从24.4元修改为21元/件。"},
+        headers=headers,
+    )
+    detail = client.get(f"/api/negotiations/{result['negotiation_id']}", headers=ADMIN_HEADERS).json()
+    assert detail["quoted_price"] == 21
+    assert detail["score"] > original_score
+    assert any("报价 ¥21/件" in message["content"] for message in detail["messages"] if message["sender"] == "system")
+
+
+def test_confirming_same_exact_term_still_rechecks_score(monkeypatch):
+    client = make_client(monkeypatch, NegotiationTurn(reply="账期信息收到。"))
+    headers = login_headers(client)
+    result = submit_offer(client, headers)
+    client.post(
+        f"/api/negotiations/{result['negotiation_id']}/messages",
+        json={"content": "账期确认维持30天不变。"},
+        headers=headers,
+    )
+    detail = client.get(f"/api/negotiations/{result['negotiation_id']}", headers=ADMIN_HEADERS).json()
+    assert any("明确条款与当前记录一致" in message["content"] for message in detail["messages"] if message["sender"] == "system")
 
 
 def test_price_above_hard_cap_closes_negotiation(monkeypatch):

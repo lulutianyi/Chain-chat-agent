@@ -35,6 +35,19 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertGreaterEqual(score.total, 82)
         self.assertEqual((classification, action), ("qualified", "manual_handoff"))
 
+    def test_payment_term_is_a_minimum_hard_requirement(self):
+        result = enforce_hard_rules(
+            quoted_price=20, hard_max_price=25, moq=100, max_moq=200,
+            lead_days=7, max_lead_days=14, payment_days=15, min_payment_days=30,
+            qualifications=[], required_qualifications=[],
+        )
+        self.assertFalse(result.passed)
+        self.assertIn("低于最低要求", result.reasons[0])
+
+    def test_hard_failure_always_beats_a_high_score(self):
+        classification, action = classify_supplier(hard_pass=False, score=100, handoff_score=82)
+        self.assertEqual((classification, action), ("eliminated", "polite_close"))
+
 
 if __name__ == "__main__":
     unittest.main()
