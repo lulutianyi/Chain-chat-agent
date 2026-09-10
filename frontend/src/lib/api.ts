@@ -3,6 +3,7 @@ const ADMIN_TOKEN = process.env.NEXT_PUBLIC_ADMIN_TOKEN || "";
 
 const SUPPLIER_TOKEN_KEY = "liantan_supplier_token";
 const SUPPLIER_PHONE_KEY = "liantan_supplier_phone";
+const MERCHANT_TOKEN_KEY = "liantan_merchant_token";
 
 type AuthMode = "admin" | "supplier" | "none";
 
@@ -20,6 +21,15 @@ export function setSupplierAuth(token: string, phone: string) {
 export function clearSupplierAuth() {
   if (typeof window === "undefined") return;
   try { window.localStorage.removeItem(SUPPLIER_TOKEN_KEY); window.localStorage.removeItem(SUPPLIER_PHONE_KEY); } catch { /* ignore */ }
+}
+export function getMerchantToken(): string | null { return safeGet(MERCHANT_TOKEN_KEY); }
+export function setMerchantAuth(token: string) {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(MERCHANT_TOKEN_KEY, token); } catch { /* ignore */ }
+}
+export function clearMerchantAuth() {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.removeItem(MERCHANT_TOKEN_KEY); } catch { /* ignore */ }
 }
 
 export type SupplierOffer = {
@@ -68,6 +78,8 @@ export type SupplierReply = {
 };
 export type SupplierCode = { phone: string; code: string; expires_in: number };
 export type SupplierToken = { access_token: string; phone: string };
+export type MerchantProfile = { store_name: string; logo_emoji: string; logo_image: string; contact: string; category: string };
+export type MerchantToken = MerchantProfile & { access_token: string };
 export type EvaluationDataset = { key: string; label: string; filename: string; exists: boolean; count: number; size_bytes: number };
 export type RuleEvaluationCase = { case_id: string; group: string; supplier: string; product: string; expected: string; actual: string; matched: boolean; score: number; reasons: string[] };
 export type RuleEvaluationResult = {
@@ -85,7 +97,11 @@ async function request<T>(path: string, init?: RequestInit, auth: AuthMode = "no
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
   if (init?.body instanceof FormData) delete headers["Content-Type"]; // 让浏览器自带 multipart boundary
   else if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
-  if (auth === "admin" && ADMIN_TOKEN) headers["Authorization"] = `Bearer ${ADMIN_TOKEN}`;
+  if (auth === "admin") {
+    // 采购方登录后优先用商家 token，否则回退到环境 ADMIN_TOKEN（网页调试）。
+    const token = getMerchantToken() || ADMIN_TOKEN;
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+  }
   else if (auth === "supplier") {
     const token = getSupplierToken();
     if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -104,6 +120,23 @@ export function requestSupplierCode(phone: string) {
 }
 export function supplierLogin(phone: string, code: string) {
   return request<SupplierToken>("/api/auth/supplier/login", { method: "POST", body: JSON.stringify({ phone, code }) });
+}
+
+// —— 采购方（商家）账号 ——
+export function merchantLogin(password: string) {
+  return request<MerchantToken>("/api/auth/merchant/login", { method: "POST", body: JSON.stringify({ password }) });
+}
+export function merchantLogout() {
+  return request<{ ok: boolean }>("/api/auth/merchant/logout", { method: "POST" }, "admin");
+}
+export function changeMerchantPassword(current_password: string, new_password: string) {
+  return request<{ ok: boolean }>("/api/auth/merchant/password", { method: "PUT", body: JSON.stringify({ current_password, new_password }) }, "admin");
+}
+export function getMerchantProfile() {
+  return request<MerchantProfile>("/api/merchant/profile", undefined, "admin");
+}
+export function updateMerchantProfile(payload: MerchantProfile) {
+  return request<MerchantProfile>("/api/merchant/profile", { method: "PUT", body: JSON.stringify(payload) }, "admin");
 }
 
 // —— 供应商侧 ——

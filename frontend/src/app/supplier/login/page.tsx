@@ -21,7 +21,7 @@ export default function SupplierLoginPage() {
 
   async function sendCode() {
     const trimmed = phone.trim();
-    if (!/^\d{6,40}$/.test(trimmed)) { setError("请输入正确的手机号"); return; }
+    if (!/^\d{11}$/.test(trimmed)) { setError("请输入 11 位手机号"); return; }
     setRequesting(true); setError(""); setNotice("");
     try {
       const res = await requestSupplierCode(trimmed);
@@ -70,7 +70,7 @@ export default function SupplierLoginPage() {
               <span className="text-xs font-semibold">手机号</span>
               <div className="relative mt-2">
                 <Smartphone className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--muted)]" />
-                <Input className="pl-9" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="请输入手机号" inputMode="numeric" />
+                <Input className="pl-9" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="请输入 11 位手机号" inputMode="numeric" maxLength={11} />
               </div>
             </label>
 

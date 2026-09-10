@@ -1,7 +1,8 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Product, ProcurementRule
+from app.models import MerchantAccount, Product, ProcurementRule
+from app.security import hash_password
 
 
 DEMO_PRODUCTS = [
@@ -49,3 +50,19 @@ def seed_demo_data(db: Session) -> None:
     db.commit()
     if db.bind and db.bind.dialect.name == "sqlite":
         db.connection().exec_driver_sql("PRAGMA optimize")
+
+
+def seed_merchant_account(db: Session) -> None:
+    """幂等写入唯一采购方账号（虚构「小鹿生活馆」），默认密码 链谈Agent123，可在账号安全里改。"""
+    if db.scalar(select(MerchantAccount.id).limit(1)) is not None:
+        return
+    db.add(
+        MerchantAccount(
+            store_name="小鹿生活馆",
+            logo_emoji="🦌",
+            contact="",
+            category="",
+            password_hash=hash_password("链谈Agent123"),
+        )
+    )
+    db.commit()

@@ -14,10 +14,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine, get_db
-from app.models import Message, Negotiation, ProcurementRule, Product, QualificationFile, Supplier, SupplierAuth
-from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, DialogueEvaluationIn, EvaluationOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, QualificationFileOut, RuleOut, RuleUpdate, SupplierCodeOut, SupplierCodeRequest, SupplierLoginRequest, SupplierOfferIn, SupplierTokenOut
-from app.seed import seed_demo_data
-from app.security import authorize_negotiation, check_code, issue_code, require_admin, require_supplier
+from app.models import MerchantAccount, Message, Negotiation, ProcurementRule, Product, QualificationFile, Supplier, SupplierAuth
+from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, DialogueEvaluationIn, EvaluationOut, MerchantLoginIn, MerchantPasswordIn, MerchantProfileIn, MerchantProfileOut, MerchantTokenOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, QualificationFileOut, RuleOut, RuleUpdate, SupplierCodeOut, SupplierCodeRequest, SupplierLoginRequest, SupplierOfferIn, SupplierTokenOut
+from app.seed import seed_demo_data, seed_merchant_account
+from app.security import authorize_negotiation, check_code, hash_password, issue_code, require_admin, require_buyer, require_supplier, validate_password, verify_password
 from app.services.llm import FALLBACK_REPLY, generate_negotiation_reply, generate_negotiation_turn
 from app.services.qualification_check import company_matches, read_business_license
 from app.services.rules import enforce_hard_rules
@@ -38,6 +38,7 @@ async def lifespan(_: FastAPI):
     _patch_sqlite_columns(engine)
     with SessionLocal() as db:
         seed_demo_data(db)
+        seed_merchant_account(db)
     yield
 
 
@@ -151,6 +152,69 @@ def supplier_login(payload: SupplierLoginRequest, db: Session = Depends(get_db))
     db.commit()
     db.refresh(auth)
     return SupplierTokenOut(access_token=auth.access_token, phone=auth.phone)
+
+
+def merchant_profile_out(account: MerchantAccount) -> dict:
+    return {
+        "store_name": account.store_name,
+        "logo_emoji": account.logo_emoji,
+        "logo_image": account.logo_image,
+        "contact": account.contact,
+        "category": account.category,
+    }
+
+
+def get_merchant_account(db: Session) -> MerchantAccount:
+    account = db.scalar(select(MerchantAccount).order_by(MerchantAccount.id).limit(1))
+    if account is None:
+        raise HTTPException(status_code=500, detail="商家账号未初始化")
+    return account
+
+
+@app.post("/api/auth/merchant/login", response_model=MerchantTokenOut)
+def merchant_login(payload: MerchantLoginIn, db: Session = Depends(get_db)):
+    account = get_merchant_account(db)
+    if not account.password_hash or not verify_password(payload.password, account.password_hash):
+        raise HTTPException(status_code=401, detail="密码错误")
+    account.access_token = secrets.token_urlsafe(32)
+    db.commit()
+    db.refresh(account)
+    return {**merchant_profile_out(account), "access_token": account.access_token}
+
+
+@app.post("/api/auth/merchant/logout")
+def merchant_logout(account: MerchantAccount = Depends(require_buyer), db: Session = Depends(get_db)):
+    account.access_token = None
+    db.commit()
+    return {"ok": True}
+
+
+@app.put("/api/auth/merchant/password")
+def merchant_change_password(payload: MerchantPasswordIn, account: MerchantAccount = Depends(require_buyer), db: Session = Depends(get_db)):
+    if not verify_password(payload.current_password, account.password_hash):
+        raise HTTPException(status_code=401, detail="原密码错误")
+    if error := validate_password(payload.new_password):
+        raise HTTPException(status_code=422, detail=error)
+    account.password_hash = hash_password(payload.new_password)
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/merchant/profile", response_model=MerchantProfileOut)
+def get_merchant_profile(account: MerchantAccount = Depends(require_buyer)):
+    return merchant_profile_out(account)
+
+
+@app.put("/api/merchant/profile", response_model=MerchantProfileOut)
+def update_merchant_profile(payload: MerchantProfileIn, account: MerchantAccount = Depends(require_buyer), db: Session = Depends(get_db)):
+    account.store_name = payload.store_name.strip() or account.store_name
+    account.logo_emoji = payload.logo_emoji.strip()
+    account.logo_image = payload.logo_image
+    account.contact = payload.contact.strip()
+    account.category = payload.category.strip()
+    db.commit()
+    db.refresh(account)
+    return merchant_profile_out(account)
 
 
 @app.get("/api/supplier/negotiations", response_model=list[NegotiationOut])
