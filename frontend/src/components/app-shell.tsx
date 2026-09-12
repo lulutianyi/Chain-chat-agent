@@ -152,7 +152,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
       <div className="min-w-0">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-[var(--line)] bg-[rgba(245,243,238,.88)] px-4 backdrop-blur-xl sm:px-6 lg:px-8">
+        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-[var(--line)] bg-[rgba(247,248,250,.88)] px-4 backdrop-blur-xl sm:px-6 lg:px-8">
           <div className="flex items-center gap-3 lg:hidden"><BrandMark /><span className="font-bold">链谈 Agent</span></div>
           <div className="hidden items-center gap-2 text-xs text-[var(--muted)] lg:flex"><span className="size-2 rounded-full bg-[var(--success)]" />系统运行正常·AI 防火墙已开启</div>
           <div className="ml-auto flex items-center gap-3">
@@ -199,7 +199,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </header>
         <main className="mx-auto max-w-[1500px] p-4 pb-24 sm:p-6 lg:p-8 lg:pb-8">{children}</main>
       </div>
-      <nav className={cn("fixed inset-x-3 bottom-3 z-30 grid rounded-2xl border border-white/10 bg-[rgba(24,35,31,.94)] p-1.5 text-white shadow-2xl backdrop-blur-lg lg:hidden", isBuyer ? "grid-cols-2" : "grid-cols-4")}>
+      <nav className={cn("fixed inset-x-3 bottom-3 z-30 grid rounded-2xl border border-white/10 bg-[rgba(17,24,39,.94)] p-1.5 text-white shadow-2xl backdrop-blur-lg lg:hidden", isBuyer ? "grid-cols-2" : "grid-cols-4")}>
         {navItems.map(({ href, short, icon: Icon }) => {
           const active = pathname === href;
           return <Link key={href} href={href} className={cn("flex flex-col items-center gap-1 rounded-xl py-2 text-[10px]", active ? "bg-white text-[var(--ink)]" : "text-white/55")}><Icon className={cn("size-4", active && "text-[var(--accent)]")} />{short}</Link>;
