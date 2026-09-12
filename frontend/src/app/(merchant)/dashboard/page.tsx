@@ -14,7 +14,7 @@ import { QUALIFICATION_OPTIONS } from "@/lib/constants";
 
 type MetricKey = "today" | "ai" | "qualified" | "saved";
 const emptySummary: DashboardSummary = { today_received: 0, ai_active: 0, qualified: 0, minutes_saved: 0, items: [] };
-const blankProduct = { name: "", category: "", description: "", target_price: "", hard_max_price: "", max_moq: "", max_lead_days: "14", max_payment_days: "30", handoff_score: "82", required_qualifications: ["营业执照", "质检报告"] as string[], preferred_regions: "" };
+const blankProduct = { name: "", category: "", description: "", target_price: "", hard_max_price: "", max_moq: "", max_lead_days: "14", max_payment_days: "30", handoff_score: "82", required_qualifications: ["营业执照", "质检报告"] as string[], preferred_regions: "", ml_model: "decision_tree", ml_qualify_threshold: "0.5", ml_eliminate_threshold: "0.5" };
 
 export default function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary>(emptySummary);
@@ -43,11 +43,11 @@ export default function DashboardPage() {
   function editProduct(product?: ManagedProduct) {
     if (!product) { setEditingId(null); setForm(blankProduct); return; }
     setEditingId(product.id);
-    setForm({ name: product.name, category: product.category, description: product.description, target_price: String(product.target_price), hard_max_price: String(product.hard_max_price), max_moq: String(product.max_moq), max_lead_days: String(product.max_lead_days), max_payment_days: String(product.max_payment_days), handoff_score: String(product.handoff_score), required_qualifications: product.required_qualifications, preferred_regions: product.preferred_regions.join(",") });
+    setForm({ name: product.name, category: product.category, description: product.description, target_price: String(product.target_price), hard_max_price: String(product.hard_max_price), max_moq: String(product.max_moq), max_lead_days: String(product.max_lead_days), max_payment_days: String(product.max_payment_days), handoff_score: String(product.handoff_score), required_qualifications: product.required_qualifications, preferred_regions: product.preferred_regions.join(","), ml_model: product.ml_model, ml_qualify_threshold: String(product.ml_qualify_threshold), ml_eliminate_threshold: String(product.ml_eliminate_threshold) });
   }
   async function saveProduct() {
     setSaving(true); setNotice("");
-    const base = { name: form.name.trim(), category: form.category.trim(), description: form.description.trim(), target_price: Number(form.target_price), hard_max_price: Number(form.hard_max_price), max_moq: Number(form.max_moq), max_lead_days: Number(form.max_lead_days), max_payment_days: Number(form.max_payment_days), handoff_score: Number(form.handoff_score), required_qualifications: form.required_qualifications, preferred_regions: form.preferred_regions.split(/[,，]/).map(v => v.trim()).filter(Boolean) };
+    const base = { name: form.name.trim(), category: form.category.trim(), description: form.description.trim(), target_price: Number(form.target_price), hard_max_price: Number(form.hard_max_price), max_moq: Number(form.max_moq), max_lead_days: Number(form.max_lead_days), max_payment_days: Number(form.max_payment_days), handoff_score: Number(form.handoff_score), required_qualifications: form.required_qualifications, preferred_regions: form.preferred_regions.split(/[,，]/).map(v => v.trim()).filter(Boolean), ml_model: form.ml_model, ml_qualify_threshold: Number(form.ml_qualify_threshold), ml_eliminate_threshold: Number(form.ml_eliminate_threshold) };
     try {
       const wasEditing = editingId !== null;
       if (editingId) { const old = products.find(p => p.id === editingId)!; await updateProduct(editingId, { ...base, active: old.active }); } else await createProduct(base);
@@ -76,4 +76,9 @@ export default function DashboardPage() {
 
 function Field({ label, value, set, number = false }: { label: string; value: string; set: (value: string) => void; number?: boolean }) {
   return <label><span className="text-xs font-semibold">{label}</span><Input className="mt-2" type={number ? "number" : "text"} value={value} onChange={e => set(e.target.value)} /></label>;
+}
+
+function ThresholdSlider({ label, value, set }: { label: string; value: string; set: (value: string) => void }) {
+  const pct = Math.round(Number(value || 0) * 100);
+  return <label className="block"><div className="flex items-center justify-between"><span className="text-xs font-semibold">{label}</span><span className="text-xs font-semibold text-[var(--accent)]">{pct}%</span></div><input type="range" min={0} max={100} step={1} value={pct} onChange={e => set(String(Number(e.target.value) / 100))} className="mt-2 w-full accent-[var(--accent)]" /></label>;
 }

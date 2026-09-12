@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,6 +24,10 @@ class ProductCreate(BaseModel):
     handoff_score: int = Field(default=82, ge=0, le=100)
     required_qualifications: list[str] = []
     preferred_regions: list[str] = []
+    # ML 评分（SCORING_MODE=ml 时生效）
+    ml_model: Literal["decision_tree", "logistic_regression"] = "decision_tree"
+    ml_qualify_threshold: float = Field(default=0.5, ge=0, le=1)
+    ml_eliminate_threshold: float = Field(default=0.5, ge=0, le=1)
 
 
 class ProductUpdate(ProductCreate):
@@ -70,6 +75,9 @@ class RuleOut(BaseModel):
     handoff_score: int
     required_qualifications: list[str]
     preferred_regions: list[str]
+    ml_model: str
+    ml_qualify_threshold: float
+    ml_eliminate_threshold: float
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -82,6 +90,9 @@ class RuleUpdate(BaseModel):
     handoff_score: int = Field(ge=0, le=100)
     required_qualifications: list[str]
     preferred_regions: list[str]
+    ml_model: Literal["decision_tree", "logistic_regression"] = "decision_tree"
+    ml_qualify_threshold: float = Field(default=0.5, ge=0, le=1)
+    ml_eliminate_threshold: float = Field(default=0.5, ge=0, le=1)
 
 
 class SupplierOfferIn(BaseModel):
@@ -100,14 +111,6 @@ class SupplierOfferIn(BaseModel):
     cooperation_rating: int = Field(default=60, ge=0, le=100)
 
 
-class ScoreBreakdown(BaseModel):
-    price: int
-    moq: int
-    qualification: int
-    region: int
-    cooperation: int
-
-
 class EvaluationOut(BaseModel):
     negotiation_id: int | None = None
     hard_pass: bool
@@ -115,7 +118,8 @@ class EvaluationOut(BaseModel):
     score: int
     classification: str
     action: str
-    score_breakdown: ScoreBreakdown
+    # 规则模式：价格/起订量/资质/区域/配合度五维明细；ML 模式：三类概率。
+    score_breakdown: dict[str, int | float] | None = None
 
 
 class ChatIn(BaseModel):
@@ -223,3 +227,22 @@ class MerchantProfileOut(BaseModel):
 
 class MerchantTokenOut(MerchantProfileOut):
     access_token: str
+
+
+class MLPredictIn(BaseModel):
+    """机器学习评分：单条供应商报价 + 规则参数。"""
+    quoted_price: float = Field(gt=0)
+    target_price: float = Field(gt=0)
+    moq: int = Field(gt=0)
+    max_moq: int = Field(gt=0)
+    payment_days: int = Field(ge=0)
+    min_payment_days: int = Field(ge=0)
+    qualifications: list[str] = []
+    model: Literal["decision_tree", "logistic_regression"] = "decision_tree"
+
+
+class MLPredictOut(BaseModel):
+    classification: str
+    score: int
+    probabilities: dict[str, float]
+    model: str

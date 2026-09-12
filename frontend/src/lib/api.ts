@@ -62,6 +62,7 @@ export type ManagedProduct = {
   id: number; name: string; category: string; description: string; active: boolean;
   target_price: number; hard_max_price: number; max_moq: number; max_lead_days: number;
   max_payment_days: number; handoff_score: number; required_qualifications: string[]; preferred_regions: string[];
+  ml_model: string; ml_qualify_threshold: number; ml_eliminate_threshold: number;
 };
 
 export type DashboardItem = { id: number; supplier: string; product: string; score: number; price: number; moq: number; status: string; classification: string; is_today: boolean };
@@ -91,6 +92,11 @@ export type RuleEvaluationResult = {
 export type DialogueEvaluationResult = {
   total: number; passed: number; pass_rate: number; llm_configured: boolean; fallback_count: number; note: string;
   results: { case_id: string; type: string; message: string; intent: string; expected_strategy: string; reply: string; strategy_pass: boolean; safety_pass: boolean; passed: boolean; generation_mode: "model" | "fallback" }[];
+};
+export type MLEvaluationResult = {
+  model: string; accuracy: number; candidate_accuracy: Record<string, number>; cv_accuracy_mean: number;
+  confusion_matrix: Record<string, Record<string, number>>; per_class_recall: Record<string, number>;
+  feature_importance: Record<string, number>; decision_tree_rules: string | null; rule_engine_baseline_accuracy: number; note: string;
 };
 
 async function request<T>(path: string, init?: RequestInit, auth: AuthMode = "none"): Promise<T> {
@@ -180,3 +186,4 @@ export function resumeAiNegotiation(id: number) { return request<Negotiation>(`/
 export function getEvaluationDatasets() { return request<{ datasets: EvaluationDataset[]; llm_configured: boolean }>("/api/evaluations/datasets"); }
 export function runRuleEvaluation() { return request<RuleEvaluationResult>("/api/evaluations/rules", { method: "POST" }); }
 export function runDialogueEvaluation(sampleSize: number, dialogueType?: string) { return request<DialogueEvaluationResult>("/api/evaluations/dialogues", { method: "POST", body: JSON.stringify({ sample_size: sampleSize, dialogue_type: dialogueType || null }) }); }
+export function runMLEvaluation() { return request<MLEvaluationResult>("/api/ml/evaluate", { method: "POST" }); }

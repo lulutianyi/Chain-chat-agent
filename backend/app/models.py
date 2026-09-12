@@ -29,6 +29,10 @@ class ProcurementRule(Base):
     handoff_score: Mapped[int] = mapped_column(Integer, default=82)
     required_qualifications: Mapped[list[str]] = mapped_column(JSON, default=list)
     preferred_regions: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # ML 评分（SCORING_MODE=ml 时生效）：主模型 + 两个可调概率门槛
+    ml_model: Mapped[str] = mapped_column(String(32), default="decision_tree")
+    ml_qualify_threshold: Mapped[float] = mapped_column(Float, default=0.5)
+    ml_eliminate_threshold: Mapped[float] = mapped_column(Float, default=0.5)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     product: Mapped[Product] = relationship()

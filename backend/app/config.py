@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     baidu_api_key: str | None = None
     baidu_secret_key: str | None = None
+    # 供应商评分模式：rule = 手写公式（默认）；ml = 机器学习模型（决策树）。
+    scoring_mode: str = "rule"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
