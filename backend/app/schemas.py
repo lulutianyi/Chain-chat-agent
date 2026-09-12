@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.services.scoring import DEFAULT_SCORE_WEIGHTS, SCORE_WEIGHT_KEYS
 
 
 class ProductOut(BaseModel):
@@ -24,10 +26,24 @@ class ProductCreate(BaseModel):
     handoff_score: int = Field(default=82, ge=0, le=100)
     required_qualifications: list[str] = []
     preferred_regions: list[str] = []
-    # ML 评分（SCORING_MODE=ml 时生效）
+    # 打分模型：custom_rule = 自定义规则（七维满分权重）；ml = 机器学习打分
+    scoring_model: Literal["custom_rule", "ml"] = "custom_rule"
+    score_weights: dict[str, int] = Field(default_factory=lambda: dict(DEFAULT_SCORE_WEIGHTS))
+    # ML 评分（scoring_model=ml 时生效）
     ml_model: Literal["decision_tree", "logistic_regression"] = "decision_tree"
     ml_qualify_threshold: float = Field(default=0.5, ge=0, le=1)
     ml_eliminate_threshold: float = Field(default=0.5, ge=0, le=1)
+
+    @field_validator("score_weights")
+    @classmethod
+    def _check_score_weights(cls, value: dict[str, int]) -> dict[str, int]:
+        if set(value) != set(SCORE_WEIGHT_KEYS):
+            raise ValueError("打分权重必须包含价格、起订量、资质、交期、账期、区域、配合度七项")
+        if any(not (0 <= v <= 100) for v in value.values()):
+            raise ValueError("每个维度的满分须在 0 到 100 之间")
+        if sum(value.values()) != 100:
+            raise ValueError("七个维度的满分之和必须等于 100")
+        return value
 
 
 class ProductUpdate(ProductCreate):
@@ -75,6 +91,8 @@ class RuleOut(BaseModel):
     handoff_score: int
     required_qualifications: list[str]
     preferred_regions: list[str]
+    scoring_model: str
+    score_weights: dict[str, int] | None
     ml_model: str
     ml_qualify_threshold: float
     ml_eliminate_threshold: float
@@ -90,9 +108,22 @@ class RuleUpdate(BaseModel):
     handoff_score: int = Field(ge=0, le=100)
     required_qualifications: list[str]
     preferred_regions: list[str]
+    scoring_model: Literal["custom_rule", "ml"] = "custom_rule"
+    score_weights: dict[str, int] = Field(default_factory=lambda: dict(DEFAULT_SCORE_WEIGHTS))
     ml_model: Literal["decision_tree", "logistic_regression"] = "decision_tree"
     ml_qualify_threshold: float = Field(default=0.5, ge=0, le=1)
     ml_eliminate_threshold: float = Field(default=0.5, ge=0, le=1)
+
+    @field_validator("score_weights")
+    @classmethod
+    def _check_score_weights(cls, value: dict[str, int]) -> dict[str, int]:
+        if set(value) != set(SCORE_WEIGHT_KEYS):
+            raise ValueError("打分权重必须包含价格、起订量、资质、交期、账期、区域、配合度七项")
+        if any(not (0 <= v <= 100) for v in value.values()):
+            raise ValueError("每个维度的满分须在 0 到 100 之间")
+        if sum(value.values()) != 100:
+            raise ValueError("七个维度的满分之和必须等于 100")
+        return value
 
 
 class SupplierOfferIn(BaseModel):

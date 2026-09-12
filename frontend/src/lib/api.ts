@@ -62,6 +62,7 @@ export type ManagedProduct = {
   id: number; name: string; category: string; description: string; active: boolean;
   target_price: number; hard_max_price: number; max_moq: number; max_lead_days: number;
   max_payment_days: number; handoff_score: number; required_qualifications: string[]; preferred_regions: string[];
+  scoring_model: "custom_rule" | "ml"; score_weights: Record<string, number>;
   ml_model: string; ml_qualify_threshold: number; ml_eliminate_threshold: number;
 };
 

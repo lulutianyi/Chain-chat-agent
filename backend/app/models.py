@@ -29,7 +29,11 @@ class ProcurementRule(Base):
     handoff_score: Mapped[int] = mapped_column(Integer, default=82)
     required_qualifications: Mapped[list[str]] = mapped_column(JSON, default=list)
     preferred_regions: Mapped[list[str]] = mapped_column(JSON, default=list)
-    # ML 评分（SCORING_MODE=ml 时生效）：主模型 + 两个可调概率门槛
+    # 打分模型：custom_rule = 自定义规则（百分制七维权重），ml = 机器学习打分
+    scoring_model: Mapped[str] = mapped_column(String(32), default="custom_rule")
+    # 自定义规则的七维满分（JSON，键见 scoring.DEFAULT_SCORE_WEIGHTS）；空时按默认值打分
+    score_weights: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
+    # ML 评分（scoring_model=ml 时生效）：主模型 + 两个可调概率门槛
     ml_model: Mapped[str] = mapped_column(String(32), default="decision_tree")
     ml_qualify_threshold: Mapped[float] = mapped_column(Float, default=0.5)
     ml_eliminate_threshold: Mapped[float] = mapped_column(Float, default=0.5)

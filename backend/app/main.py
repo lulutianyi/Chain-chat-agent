@@ -21,7 +21,7 @@ from app.security import authorize_negotiation, check_code, hash_password, issue
 from app.services.llm import FALLBACK_REPLY, generate_negotiation_reply, generate_negotiation_turn, generate_opening_message
 from app.services.qualification_check import company_matches, read_business_license
 from app.services.rules import enforce_hard_rules
-from app.services.scoring import calculate_supplier_score, classify_supplier
+from app.services.scoring import DEFAULT_SCORE_WEIGHTS, ScoreResult, calculate_supplier_score, classify_supplier
 from app.services.term_extraction import extract_supplier_terms
 from app.services.evaluation import LABEL_ZH, dataset_summary, dialogue_cases, dialogue_safety_pass, dialogue_strategy_pass, run_rule_evaluation
 from app.services import ml_scoring
@@ -55,6 +55,8 @@ def _patch_sqlite_columns(engine) -> None:
             ("ocr_detail", "VARCHAR(500) DEFAULT ''"),
         ),
         "procurement_rules": (
+            ("scoring_model", "VARCHAR(32) DEFAULT 'custom_rule'"),
+            ("score_weights", "TEXT"),
             ("ml_model", "VARCHAR(32) DEFAULT 'decision_tree'"),
             ("ml_qualify_threshold", "FLOAT DEFAULT 0.5"),
             ("ml_eliminate_threshold", "FLOAT DEFAULT 0.5"),
@@ -93,8 +95,8 @@ def get_negotiation_or_404(db: Session, negotiation_id: int) -> Negotiation:
 def evaluate_terms(rule: ProcurementRule, *, quoted_price: float, moq: int, lead_days: int, payment_days: int, qualifications: list[str], region: str, cooperation_rating: int) -> tuple:
     """底线校验 + 评分 + 三级分类。提交报价与谈判中重新评估共用这一份决策逻辑。
 
-    评分模式由配置 SCORING_MODE 控制：
-    - rule（默认）：手写加权公式；
+    打分模型由商品级 rule.scoring_model 控制：
+    - custom_rule（默认）：手写加权公式，七维满分取自 rule.score_weights（空则默认值）；
     - ml：机器学习模型（决策树），硬性规则仍计算并随结果返回，但不强制淘汰。
     """
     hard = enforce_hard_rules(
@@ -109,7 +111,7 @@ def evaluate_terms(rule: ProcurementRule, *, quoted_price: float, moq: int, lead
         qualifications=qualifications,
         required_qualifications=rule.required_qualifications,
     )
-    if get_settings().scoring_mode == "ml":
+    if rule.scoring_model == "ml":
         prediction = ml_scoring.predict_offer(
             quoted_price=quoted_price,
             target_price=rule.target_price,
@@ -141,6 +143,7 @@ def evaluate_terms(rule: ProcurementRule, *, quoted_price: float, moq: int, lead
         max_lead_days=rule.max_lead_days,
         payment_days=payment_days,
         min_payment_days=rule.max_payment_days,
+        weights=rule.score_weights,
     )
     classification, action = classify_supplier(hard_pass=hard.passed, score=scored.total, handoff_score=rule.handoff_score)
     return hard, scored, classification, action
@@ -443,6 +446,8 @@ def product_manage_out(product: Product, rule: ProcurementRule) -> ProductManage
         max_moq=rule.max_moq, max_lead_days=rule.max_lead_days, max_payment_days=rule.max_payment_days,
         handoff_score=rule.handoff_score, required_qualifications=rule.required_qualifications,
         preferred_regions=rule.preferred_regions,
+        scoring_model=rule.scoring_model,
+        score_weights={**DEFAULT_SCORE_WEIGHTS, **(rule.score_weights or {})},
         ml_model=rule.ml_model, ml_qualify_threshold=rule.ml_qualify_threshold,
         ml_eliminate_threshold=rule.ml_eliminate_threshold,
     )
