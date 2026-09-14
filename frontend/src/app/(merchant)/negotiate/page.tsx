@@ -393,7 +393,7 @@ export default function NegotiatePage() {
           <div
             ref={messageViewportRef}
             onScroll={handleMessageScroll}
-            className="thin-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain bg-[#faf9f6] p-4 sm:p-6"
+            className="thin-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain bg-[#f8fafc] p-4 sm:p-6"
           >
             {hasOlderMessages && (
               <button
@@ -441,7 +441,7 @@ export default function NegotiatePage() {
                         )}
                       >
                         {message.sender === "ai" && (
-                          <div className="mb-1.5 flex items-center gap-1.5 text-[10px] text-[#f4a483]">
+                          <div className="mb-1.5 flex items-center gap-1.5 text-[10px] text-[#93c5fd]">
                             <Bot className="size-3" />
                             AI 采购助手
                           </div>

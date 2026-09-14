@@ -15,15 +15,16 @@ from sqlalchemy.orm import Session, selectinload
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine, get_db
 from app.models import MerchantAccount, Message, Negotiation, ProcurementRule, Product, QualificationFile, Supplier, SupplierAuth
-from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, DialogueEvaluationIn, EvaluationOut, MerchantLoginIn, MerchantPasswordIn, MerchantProfileIn, MerchantProfileOut, MerchantTokenOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, QualificationFileOut, RuleOut, RuleUpdate, SupplierCodeOut, SupplierCodeRequest, SupplierLoginRequest, SupplierOfferIn, SupplierTokenOut
+from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, DialogueEvaluationIn, EvaluationOut, MerchantLoginIn, MerchantPasswordIn, MerchantProfileIn, MerchantProfileOut, MerchantTokenOut, MLPredictIn, MLPredictOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, QualificationFileOut, RuleOut, RuleUpdate, SupplierCodeOut, SupplierCodeRequest, SupplierLoginRequest, SupplierOfferIn, SupplierTokenOut
 from app.seed import seed_demo_data, seed_merchant_account
 from app.security import authorize_negotiation, check_code, hash_password, issue_code, require_admin, require_buyer, require_supplier, validate_password, verify_password
 from app.services.llm import FALLBACK_REPLY, generate_boundary_recovery_reply, generate_negotiation_reply, generate_negotiation_turn, generate_opening_message
 from app.services.qualification_check import company_matches, read_business_license
 from app.services.rules import enforce_hard_rules
-from app.services.scoring import calculate_supplier_score, classify_supplier
+from app.services.scoring import DEFAULT_SCORE_WEIGHTS, ScoreResult, calculate_supplier_score, classify_supplier
 from app.services.term_extraction import extract_supplier_terms
 from app.services.evaluation import LABEL_ZH, dataset_summary, dialogue_cases, dialogue_safety_pass, dialogue_strategy_pass, run_rule_evaluation
+from app.services import ml_scoring
 
 POLITE_CLOSE_REPLY = "感谢您提供资料。当前供货条件与我们的采购要求暂不匹配，本次暂不继续洽谈。"
 
@@ -47,15 +48,26 @@ def _patch_sqlite_columns(engine) -> None:
     """create_all 只建表不加列：给旧演示库补齐后续新增字段（仅 SQLite 本地库）。"""
     if engine.dialect.name != "sqlite":
         return
-    with engine.begin() as conn:
-        columns = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(qualification_files)")]
-        for name, ddl in (
+    patches = {
+        "qualification_files": (
             ("ocr_status", "VARCHAR(32) DEFAULT 'not_checked'"),
             ("ocr_company", "VARCHAR(255) DEFAULT ''"),
             ("ocr_detail", "VARCHAR(500) DEFAULT ''"),
-        ):
-            if name not in columns:
-                conn.exec_driver_sql(f"ALTER TABLE qualification_files ADD COLUMN {name} {ddl}")
+        ),
+        "procurement_rules": (
+            ("scoring_model", "VARCHAR(32) DEFAULT 'custom_rule'"),
+            ("score_weights", "TEXT"),
+            ("ml_model", "VARCHAR(32) DEFAULT 'decision_tree'"),
+            ("ml_qualify_threshold", "FLOAT DEFAULT 0.5"),
+            ("ml_eliminate_threshold", "FLOAT DEFAULT 0.5"),
+        ),
+    }
+    with engine.begin() as conn:
+        for table, columns_spec in patches.items():
+            existing = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
+            for name, ddl in columns_spec:
+                if name not in existing:
+                    conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
 
 settings = get_settings()
@@ -81,7 +93,12 @@ def get_negotiation_or_404(db: Session, negotiation_id: int) -> Negotiation:
 
 
 def evaluate_terms(rule: ProcurementRule, *, quoted_price: float, moq: int, lead_days: int, payment_days: int, qualifications: list[str], region: str, cooperation_rating: int) -> tuple:
-    """底线校验 + 加权评分 + 三级分类。提交报价与谈判中重新评估共用这一份决策逻辑。"""
+    """底线校验 + 评分 + 三级分类。提交报价与谈判中重新评估共用这一份决策逻辑。
+
+    打分模型由商品级 rule.scoring_model 控制：
+    - custom_rule（默认）：手写加权公式，七维满分取自 rule.score_weights（空则默认值）；
+    - ml：机器学习模型（决策树），硬性规则仍计算并随结果返回，但不强制淘汰。
+    """
     hard = enforce_hard_rules(
         quoted_price=quoted_price,
         hard_max_price=rule.hard_max_price,
@@ -94,6 +111,23 @@ def evaluate_terms(rule: ProcurementRule, *, quoted_price: float, moq: int, lead
         qualifications=qualifications,
         required_qualifications=rule.required_qualifications,
     )
+    if rule.scoring_model == "ml":
+        prediction = ml_scoring.predict_offer(
+            quoted_price=quoted_price,
+            target_price=rule.target_price,
+            moq=moq,
+            max_moq=rule.max_moq,
+            payment_days=payment_days,
+            min_payment_days=rule.max_payment_days,
+            qualifications=qualifications,
+            model_kind=rule.ml_model,
+            qualify_threshold=rule.ml_qualify_threshold,
+            eliminate_threshold=rule.ml_eliminate_threshold,
+        )
+        scored = ScoreResult(total=prediction.score, breakdown={LABEL_ZH[k]: round(v * 100, 1) for k, v in prediction.probabilities.items()})
+        action = ml_scoring.ACTION_BY_CLASS[prediction.classification]
+        return hard, scored, prediction.classification, action
+
     scored = calculate_supplier_score(
         quoted_price=quoted_price,
         target_price=rule.target_price,
@@ -109,6 +143,7 @@ def evaluate_terms(rule: ProcurementRule, *, quoted_price: float, moq: int, lead
         max_lead_days=rule.max_lead_days,
         payment_days=payment_days,
         min_payment_days=rule.max_payment_days,
+        weights=rule.score_weights,
     )
     classification, action = classify_supplier(hard_pass=hard.passed, score=scored.total, handoff_score=rule.handoff_score)
     return hard, scored, classification, action
@@ -352,6 +387,53 @@ async def evaluate_dialogue_dataset(payload: DialogueEvaluationIn):
     }
 
 
+@app.get("/api/ml/status")
+def ml_model_status():
+    try:
+        return ml_scoring.status()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"模型状态读取失败：{exc}") from exc
+
+
+@app.post("/api/ml/train")
+def ml_train_endpoint():
+    try:
+        return ml_scoring.train()
+    except (OSError, KeyError, TypeError, ValueError, ImportError) as exc:
+        raise HTTPException(status_code=422, detail=f"模型训练失败：{exc}") from exc
+
+
+@app.post("/api/ml/predict", response_model=MLPredictOut)
+def ml_predict_endpoint(payload: MLPredictIn):
+    try:
+        prediction = ml_scoring.predict_offer(
+            quoted_price=payload.quoted_price,
+            target_price=payload.target_price,
+            moq=payload.moq,
+            max_moq=payload.max_moq,
+            payment_days=payload.payment_days,
+            min_payment_days=payload.min_payment_days,
+            qualifications=payload.qualifications,
+            model_kind=payload.model,
+        )
+    except (OSError, ValueError, ImportError) as exc:
+        raise HTTPException(status_code=422, detail=f"模型预测失败：{exc}") from exc
+    return MLPredictOut(
+        classification=prediction.classification,
+        score=prediction.score,
+        probabilities=prediction.probabilities,
+        model=prediction.model,
+    )
+
+
+@app.post("/api/ml/evaluate")
+def ml_evaluate_endpoint():
+    try:
+        return ml_scoring.evaluate()
+    except (OSError, KeyError, TypeError, ValueError, ImportError) as exc:
+        raise HTTPException(status_code=422, detail=f"模型评估失败：{exc}") from exc
+
+
 @app.get("/api/products", response_model=list[ProductOut])
 def list_products(db: Session = Depends(get_db)):
     return db.scalars(select(Product).where(Product.active.is_(True)).order_by(Product.id)).all()
@@ -364,6 +446,10 @@ def product_manage_out(product: Product, rule: ProcurementRule) -> ProductManage
         max_moq=rule.max_moq, max_lead_days=rule.max_lead_days, max_payment_days=rule.max_payment_days,
         handoff_score=rule.handoff_score, required_qualifications=rule.required_qualifications,
         preferred_regions=rule.preferred_regions,
+        scoring_model=rule.scoring_model,
+        score_weights={**DEFAULT_SCORE_WEIGHTS, **(rule.score_weights or {})},
+        ml_model=rule.ml_model, ml_qualify_threshold=rule.ml_qualify_threshold,
+        ml_eliminate_threshold=rule.ml_eliminate_threshold,
     )
 
 

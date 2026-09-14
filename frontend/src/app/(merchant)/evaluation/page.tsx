@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, BrainCircuit, CheckCircle2, Database, FileJson2, FlaskConical, Play, ShieldCheck, XCircle } from "lucide-react";
+import { AlertTriangle, BrainCircuit, CheckCircle2, Cpu, Database, FileJson2, FlaskConical, Play, ShieldCheck, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { getEvaluationDatasets, runDialogueEvaluation, runRuleEvaluation, type DialogueEvaluationResult, type EvaluationDataset, type RuleEvaluationResult } from "@/lib/api";
+import { getEvaluationDatasets, runDialogueEvaluation, runMLEvaluation, runRuleEvaluation, type DialogueEvaluationResult, type EvaluationDataset, type MLEvaluationResult, type RuleEvaluationResult } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const label: Record<string, string> = { eliminated: "淘汰", negotiating: "AI拉锯", qualified: "转人工" };
@@ -18,8 +18,10 @@ export default function EvaluationPage() {
   const [loadingData, setLoadingData] = useState(true);
   const [runningRule, setRunningRule] = useState(false);
   const [runningDialogue, setRunningDialogue] = useState(false);
+  const [runningML, setRunningML] = useState(false);
   const [ruleResult, setRuleResult] = useState<RuleEvaluationResult | null>(null);
   const [dialogueResult, setDialogueResult] = useState<DialogueEvaluationResult | null>(null);
+  const [mlResult, setMlResult] = useState<MLEvaluationResult | null>(null);
   const [sampleSize, setSampleSize] = useState("10");
   const [dialogueType, setDialogueType] = useState("全部类型");
   const [error, setError] = useState("");
@@ -39,6 +41,12 @@ export default function EvaluationPage() {
     catch (err) { setError(err instanceof Error ? err.message : "话术测评失败"); }
     finally { setRunningDialogue(false); }
   }
+  async function evaluateML() {
+    setRunningML(true); setError("");
+    try { setMlResult(await runMLEvaluation()); }
+    catch (err) { setError(err instanceof Error ? err.message : "ML 模型测评失败"); }
+    finally { setRunningML(false); }
+  }
 
   return <div className="animate-rise space-y-6">
     <section className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[var(--accent-strong)]"><FlaskConical className="size-4" />测试与验收</div><h1 className="text-2xl font-bold tracking-tight sm:text-3xl">测评实验室</h1><p className="mt-2 text-base text-[var(--muted)]">在隔离环境中检验规则分类和AI谈判回复，不写入正式供应商与谈判记录。</p></div><Badge className={cn("w-fit px-3 py-1.5", llmConfigured ? "border-[var(--success)]/20 bg-[var(--success-faint)] text-[var(--success)]" : "border-[var(--warning)]/20 bg-[var(--warning-faint)] text-[var(--warning)]")}>{llmConfigured ? "大模型API密钥已配置" : "未配置API · 使用备用回复"}</Badge></section>
@@ -50,6 +58,8 @@ export default function EvaluationPage() {
       <Card><CardHeader><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-[var(--success-faint)] text-[var(--success)]"><ShieldCheck className="size-5" /></div><div><h2 className="font-bold">规则引擎测评</h2><p className="mt-1 text-sm text-[var(--muted)]">一次运行全部1,500条报价用例，不调用大模型。</p></div></div></CardHeader><CardContent><Button variant="accent" className="w-full" disabled={runningRule || !datasets.every(item => item.exists)} onClick={() => void evaluateRules()}><Play className="size-4" />{runningRule ? "正在测评…" : "运行完整规则测评"}</Button>{ruleResult && <div className="mt-5 grid grid-cols-3 gap-3"><Metric value={`${ruleResult.accuracy}%`} name="总体准确率" /><Metric value={String(ruleResult.matched)} name="匹配预期" /><Metric value={String(ruleResult.total - ruleResult.matched)} name="需要复核" warning /></div>}</CardContent></Card>
 
       <Card><CardHeader><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-[var(--accent-faint)] text-[var(--accent)]"><BrainCircuit className="size-5" /></div><div><h2 className="font-bold">AI话术抽样测评</h2><p className="mt-1 text-sm text-[var(--muted)]">从200条话术中抽样，检查策略命中和越权风险。</p></div></div></CardHeader><CardContent><div className="grid gap-3 sm:grid-cols-[1fr_110px]"><label><span className="text-sm font-semibold">话术类型</span><select value={dialogueType} onChange={event => setDialogueType(event.target.value)} className="mt-2 h-10 w-full rounded-xl border border-[var(--line)] bg-white px-3 text-sm">{dialogueTypes.map(item => <option key={item}>{item}</option>)}</select></label><label><span className="text-sm font-semibold">抽样数量</span><Input className="mt-2" type="number" min="1" max="20" value={sampleSize} onChange={event => setSampleSize(event.target.value)} /></label></div><Button variant="accent" className="mt-4 w-full" disabled={runningDialogue || !datasets.every(item => item.exists)} onClick={() => void evaluateDialogues()}><Play className="size-4" />{runningDialogue ? "正在生成并检查回复…" : "开始话术抽样测评"}</Button>{dialogueResult && <div className="mt-5 grid grid-cols-3 gap-3"><Metric value={`${dialogueResult.pass_rate}%`} name="初筛通过率" /><Metric value={String(dialogueResult.passed)} name="通过" /><Metric value={String(dialogueResult.total - dialogueResult.passed)} name="待复核" warning /></div>}</CardContent></Card>
+
+      <Card><CardHeader><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-[var(--accent-faint)] text-[var(--accent)]"><Cpu className="size-5" /></div><div><h2 className="font-bold">ML 模型测评</h2><p className="mt-1 text-sm text-[var(--muted)]">逻辑回归 / 决策树对 1,500 条用例分类，与规则引擎对比。</p></div></div></CardHeader><CardContent><Button variant="accent" className="w-full" disabled={runningML || !datasets.every(item => item.exists)} onClick={() => void evaluateML()}><Play className="size-4" />{runningML ? "正在测评…" : "运行 ML 模型测评"}</Button>{mlResult && <div className="mt-5 space-y-4"><div className="grid grid-cols-3 gap-3"><Metric value={`${mlResult.accuracy}%`} name="ML 准确率" /><Metric value={`${mlResult.rule_engine_baseline_accuracy}%`} name="规则引擎基线" warning /><Metric value={mlResult.model === "decision_tree" ? "决策树" : "逻辑回归"} name="主模型" /></div><div className="rounded-xl bg-[var(--paper)] p-3 text-sm"><div className="mb-2 font-semibold">逐类召回率</div>{Object.entries(mlResult.per_class_recall).map(([key, value]) => <div key={key} className="flex items-center justify-between py-1 text-[var(--muted)]"><span>{label[key] ?? key}</span><span className="font-semibold text-[var(--ink)]">{value}%</span></div>)}</div></div>}</CardContent></Card>
     </section>
 
     {ruleResult && <section className="grid gap-5 xl:grid-cols-[.75fr_1.25fr]"><Card><CardHeader><h2 className="font-bold">规则组准确率</h2></CardHeader><CardContent className="space-y-4">{ruleResult.groups.map(group => <div key={group.group}><div className="flex items-center justify-between text-sm"><span className="font-semibold">规则组 {group.group}</span><span>{group.accuracy}% · {group.matched}/{group.total}</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-[var(--paper-deep)]"><div className="h-full rounded-full bg-[var(--accent)]" style={{width:`${group.accuracy}%`}} /></div></div>)}</CardContent></Card><Card><CardHeader><h2 className="font-bold">测评说明</h2></CardHeader><CardContent><div className="space-y-3">{ruleResult.notes.map(note => <div key={note} className="flex gap-2 text-sm leading-6 text-[var(--muted)]"><Database className="mt-1 size-4 shrink-0 text-[var(--accent)]" />{note}</div>)}</div></CardContent></Card></section>}

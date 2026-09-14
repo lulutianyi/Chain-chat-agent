@@ -15,6 +15,7 @@ backend/**/__pycache__/
 backend/*.db
 backend/uploads/
 backend/.pytest_cache/
+backend/app/ml_models/
 
 # Local review artifacts
 .docx-review/
