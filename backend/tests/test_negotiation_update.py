@@ -85,8 +85,12 @@ def make_client(monkeypatch, turn: NegotiationTurn) -> TestClient:
     async def fake_opening(**kwargs):
         return "您好，感谢提交方案，我们想继续商量合作条件。"
 
+    async def fake_recovery(**kwargs):
+        return "这组条件暂时超过采购底线，能否先回到上一轮方案，我们再继续寻找折中空间？"
+
     monkeypatch.setattr(main_module, "generate_negotiation_turn", fake_turn)
     monkeypatch.setattr(main_module, "generate_opening_message", fake_opening)
+    monkeypatch.setattr(main_module, "generate_boundary_recovery_reply", fake_recovery)
     return TestClient(app)
 
 
@@ -111,7 +115,7 @@ def submit_offer(client: TestClient, headers: dict) -> dict:
     return client.post("/api/suppliers/evaluate", json=payload, headers=headers).json()
 
 
-def test_concession_updates_score_and_triggers_handoff(monkeypatch):
+def test_concession_marks_candidate_but_ai_continues_until_handoff(monkeypatch):
     turn = NegotiationTurn(reply="可以接受，21 元 100 件，账期 45 天。", quoted_price=21.0, moq=100, payment_days=45)
     client = make_client(monkeypatch, turn)
     headers = login_headers(client)
@@ -126,7 +130,7 @@ def test_concession_updates_score_and_triggers_handoff(monkeypatch):
     ).json()
     assert chat["score"] >= 82
     assert chat["classification"] == "qualified"
-    assert chat["status"] == "manual_required"
+    assert chat["status"] == "ai_active"
     assert chat["handoff_required"] is True
 
     follow_up = client.post(
@@ -134,7 +138,18 @@ def test_concession_updates_score_and_triggers_handoff(monkeypatch):
         json={"content": "那什么时候签合同？"},
         headers=headers,
     ).json()
-    assert follow_up["assistant_message"] is None  # 优质候选触发后，程序硬性禁止 AI 继续回复
+    assert follow_up["assistant_message"] is not None
+    assert follow_up["status"] == "ai_active"
+
+    handed_off = client.post(f"/api/negotiations/{result['negotiation_id']}/handoff", headers=ADMIN_HEADERS).json()
+    assert handed_off["status"] == "human_active"
+    after_handoff = client.post(
+        f"/api/negotiations/{result['negotiation_id']}/messages",
+        json={"content": "人工接管后这条不应触发 AI。"},
+        headers=headers,
+    ).json()
+    assert after_handoff["assistant_message"] is None
+    assert after_handoff["status"] == "human_active"
 
     detail = client.get(f"/api/negotiations/{result['negotiation_id']}", headers=ADMIN_HEADERS).json()
     assert any("重新校验评分" in message["content"] for message in detail["messages"])
@@ -170,7 +185,7 @@ def test_confirming_same_exact_term_still_rechecks_score(monkeypatch):
     assert any("明确条款与当前记录一致" in message["content"] for message in detail["messages"] if message["sender"] == "system")
 
 
-def test_price_above_hard_cap_closes_negotiation(monkeypatch):
+def test_price_above_hard_cap_marks_offer_eliminated_but_keeps_ai_open(monkeypatch):
     turn = NegotiationTurn(reply="原材料涨价，只能 30 元了。", quoted_price=30.0)
     client = make_client(monkeypatch, turn)
     headers = login_headers(client)
@@ -183,12 +198,14 @@ def test_price_above_hard_cap_closes_negotiation(monkeypatch):
         headers=headers,
     ).json()
     assert chat["classification"] == "eliminated"
-    assert chat["status"] == "closed"
-    assert "暂不匹配" in chat["assistant_message"]
+    assert chat["status"] == "ai_active"
+    assert "回到上一轮" in chat["assistant_message"]
 
     again = client.post(
         f"/api/negotiations/{result['negotiation_id']}/messages",
-        json={"content": "再考虑一下？"},
+        json={"content": "可以，报价恢复为24元。"},
         headers=headers,
     ).json()
-    assert again["status"] == "closed"  # 淘汰后的会话保持关闭
+    assert again["status"] == "ai_active"
+    assert again["classification"] == "negotiating"
+    assert again["assistant_message"] is not None

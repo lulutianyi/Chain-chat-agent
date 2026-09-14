@@ -18,7 +18,7 @@ from app.models import MerchantAccount, Message, Negotiation, ProcurementRule, P
 from app.schemas import ChatIn, ChatOut, DashboardItem, DashboardSummary, DialogueEvaluationIn, EvaluationOut, MerchantLoginIn, MerchantPasswordIn, MerchantProfileIn, MerchantProfileOut, MerchantTokenOut, NegotiationOut, ProductCreate, ProductManageOut, ProductOut, ProductUpdate, QualificationFileOut, RuleOut, RuleUpdate, SupplierCodeOut, SupplierCodeRequest, SupplierLoginRequest, SupplierOfferIn, SupplierTokenOut
 from app.seed import seed_demo_data, seed_merchant_account
 from app.security import authorize_negotiation, check_code, hash_password, issue_code, require_admin, require_buyer, require_supplier, validate_password, verify_password
-from app.services.llm import FALLBACK_REPLY, generate_negotiation_reply, generate_negotiation_turn, generate_opening_message
+from app.services.llm import FALLBACK_REPLY, generate_boundary_recovery_reply, generate_negotiation_reply, generate_negotiation_turn, generate_opening_message
 from app.services.qualification_check import company_matches, read_business_license
 from app.services.rules import enforce_hard_rules
 from app.services.scoring import calculate_supplier_score, classify_supplier
@@ -492,7 +492,9 @@ async def evaluate_supplier(payload: SupplierOfferIn, db: Session = Depends(get_
         ).all()
         for row in claimed:
             row.supplier_id = supplier.id
-    status = "closed" if classification == "eliminated" else "manual_required" if classification == "qualified" else "ai_active"
+    # 高分只标记“建议人工接管”；在商家真正点击接管前，AI 仍保持在线。
+    # “当前方案淘汰”不等于“会话结束”：未通过底线时仍允许 AI 继续争取合规方案。
+    status = "ai_active"
     negotiation = Negotiation(
         product_id=payload.product_id,
         supplier_id=supplier.id,
@@ -522,9 +524,13 @@ async def evaluate_supplier(payload: SupplierOfferIn, db: Session = Depends(get_
         )
         db.add(Message(negotiation_id=negotiation.id, sender="ai", content=opening))
     elif classification == "qualified":
-        db.add(Message(negotiation_id=negotiation.id, sender="ai", content="感谢您提交方案，整体条件与我们的采购需求较为匹配。我们已邀请采购负责人接手，接下来将由人工与您进一步协商合作细节。"))
+        db.add(Message(negotiation_id=negotiation.id, sender="ai", content="您的方案已进入优质候选。采购负责人接管前，我会继续在线沟通；您也可以补充希望进一步确认的合作细节。"))
     else:
-        db.add(Message(negotiation_id=negotiation.id, sender="ai", content=POLITE_CLOSE_REPLY))
+        recovery = await generate_boundary_recovery_reply(
+            supplier_message="供应商刚提交首轮方案。",
+            reasons=hard.reasons,
+        )
+        db.add(Message(negotiation_id=negotiation.id, sender="ai", content=recovery))
     db.commit()
     db.refresh(negotiation)
     return EvaluationOut(
@@ -562,19 +568,25 @@ async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Sessio
     local_terms = extract_supplier_terms(payload.content)
     db.add(Message(negotiation_id=negotiation.id, sender="supplier", content=payload.content))
 
-    # 人工接管或优质候选状态下，程序层硬性禁止 LLM 自动回复。
-    if negotiation.status in {"manual_required", "human_active"} or negotiation.classification == "qualified":
-        negotiation.status = "manual_required"
+    # 只有商家真正点击接管后才停止 LLM；高分候选本身不会关闭 AI。
+    if negotiation.status == "human_active":
         db.commit()
         return ChatOut(negotiation_id=negotiation.id, status=negotiation.status, assistant_message=None, handoff_required=True, classification=negotiation.classification, score=negotiation.score)
+    # 兼容旧版本自动写入的等待接管状态，使历史优质候选也能继续 AI 洽谈。
+    if negotiation.status == "manual_required":
+        negotiation.status = "ai_active"
 
-    if negotiation.status == "closed" or negotiation.classification == "eliminated":
+    if negotiation.status == "closed":
         db.add(Message(negotiation_id=negotiation.id, sender="ai", content=POLITE_CLOSE_REPLY))
         db.commit()
         return ChatOut(negotiation_id=negotiation.id, status="closed", assistant_message=POLITE_CLOSE_REPLY, handoff_required=False, classification="eliminated", score=negotiation.score)
 
     rule = db.scalar(select(ProcurementRule).where(ProcurementRule.product_id == negotiation.product_id, ProcurementRule.active.is_(True)))
-    decision_context = f"继续 AI 议价；当前评分 {negotiation.score}；禁止做出下单或付款承诺。"
+    previous_price = negotiation.quoted_price
+    previous_moq = negotiation.moq
+    previous_lead_days = negotiation.lead_days
+    previous_payment_days = negotiation.payment_days
+    decision_context = f"当前评分 {negotiation.score}。"
     if rule is not None:
         detected = []
         if local_terms.quoted_price is not None:
@@ -589,10 +601,20 @@ async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Sessio
             f" 当前条款：报价 ¥{negotiation.quoted_price:g}（目标 ¥{rule.target_price:g}）、"
             f"起订量 {negotiation.moq}（上限 {rule.max_moq}）、交期 {negotiation.lead_days} 天（上限 {rule.max_lead_days}）、"
             f"账期 {negotiation.payment_days} 天（最低期望 {rule.max_payment_days}）。"
-            "先认可供应商已做出的让步，再选择差距较大的一至两项委婉协商。"
         )
         if detected:
-            decision_context += f" 本轮本地程序已确认供应商明确提出：{'、'.join(detected)}；回复必须以这些新条款为准。"
+            decision_context += f" 供应商本轮明确提出：{'、'.join(detected)}。"
+        concessions = []
+        if local_terms.quoted_price is not None and local_terms.quoted_price < negotiation.quoted_price:
+            concessions.append(f"报价从 ¥{negotiation.quoted_price:g} 降到 ¥{local_terms.quoted_price:g}")
+        if local_terms.moq is not None and local_terms.moq < negotiation.moq:
+            concessions.append(f"起订量从 {negotiation.moq} 件降到 {local_terms.moq} 件")
+        if local_terms.lead_days is not None and local_terms.lead_days < negotiation.lead_days:
+            concessions.append(f"交期从 {negotiation.lead_days} 天缩短到 {local_terms.lead_days} 天")
+        if local_terms.payment_days is not None and local_terms.payment_days > negotiation.payment_days:
+            concessions.append(f"账期从 {negotiation.payment_days} 天延长到 {local_terms.payment_days} 天")
+        if concessions:
+            decision_context += f" 相比上一轮的变化：{'；'.join(concessions)}。"
         effective_price = local_terms.quoted_price if local_terms.quoted_price is not None else negotiation.quoted_price
         effective_moq = local_terms.moq if local_terms.moq is not None else negotiation.moq
         effective_lead = local_terms.lead_days if local_terms.lead_days is not None else negotiation.lead_days
@@ -603,17 +625,17 @@ async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Sessio
         (remaining if effective_moq > rule.max_moq * 0.5 else achieved).append("起订量")
         (remaining if effective_lead > rule.max_lead_days * 0.5 else achieved).append("交期")
         (remaining if effective_payment < rule.max_payment_days else achieved).append("账期")
-        decision_context += f" 尚有优化空间：{'、'.join(remaining) or '无'}；已经达到目标、禁止重复追问：{'、'.join(achieved) or '无'}。"
+        decision_context += f" 尚未达到采购目标：{'、'.join(remaining) or '无'}；已经达到采购目标：{'、'.join(achieved) or '无'}。"
     turn = await generate_negotiation_turn(
         supplier_message=payload.content,
         decision_context=decision_context,
         history=history,
-        extract_terms=rule is not None,
+        extract_terms=False,
     )
     reply = turn.reply
-    handoff_required = False
+    handoff_required = negotiation.classification == "qualified"
 
-    # 本地确定性解析优先于模型抽取；模型仅补充本地没有识别到的字段。
+    # 条款数字由本地确定性解析负责，模型只负责理解上下文并自然表达。
     quoted_price = local_terms.quoted_price if local_terms.quoted_price is not None else turn.quoted_price
     moq = local_terms.moq if local_terms.moq is not None else turn.moq
     lead_days = local_terms.lead_days if local_terms.lead_days is not None else turn.lead_days
@@ -650,16 +672,31 @@ async def post_supplier_message(negotiation_id: int, payload: ChatIn, db: Sessio
         )
         negotiation.score = scored.total
         negotiation.hard_fail_reasons = hard.reasons
+        previous_classification = negotiation.classification
         negotiation.classification = classification
         terms_note = "、".join(updates) if updates else "明确条款与当前记录一致"
         db.add(Message(negotiation_id=negotiation.id, sender="system", content=f"供应商更新或确认条件（{terms_note}），程序重新校验评分：{previous_score} → {scored.total}，分类调整为「{LABEL_ZH[classification]}」。"))
         if classification == "eliminated":
-            negotiation.status = "closed"
-            reply = POLITE_CLOSE_REPLY
+            negotiation.status = "ai_active"
+            handoff_required = False
+            reply = await generate_boundary_recovery_reply(
+                supplier_message=payload.content,
+                reasons=hard.reasons,
+                history=history,
+                previous_price=previous_price,
+                previous_moq=previous_moq,
+                previous_lead_days=previous_lead_days,
+                previous_payment_days=previous_payment_days,
+            )
+            db.add(Message(negotiation_id=negotiation.id, sender="system", content="本轮方案触碰采购底线，但会话保持开启；AI 已邀请供应商回到上一轮条件继续协商。"))
         elif classification == "qualified":
-            negotiation.status = "manual_required"
+            negotiation.status = "ai_active"
             handoff_required = True
-            reply = f"{reply}\n\n（系统提示：贵方最新条件已达到优质候选标准，接下来将由采购负责人与您直接对接。）"
+            if previous_classification != "qualified":
+                db.add(Message(negotiation_id=negotiation.id, sender="system", content="该供应商已达到建议人工接管标准；在商家点击接管前，AI 将继续回复。"))
+        else:
+            negotiation.status = "ai_active"
+            handoff_required = False
 
     db.add(Message(negotiation_id=negotiation.id, sender="ai", content=reply))
     db.commit()
@@ -691,8 +728,6 @@ def post_human_message(negotiation_id: int, payload: ChatIn, db: Session = Depen
 @app.post("/api/negotiations/{negotiation_id}/resume-ai", response_model=NegotiationOut)
 def resume_ai(negotiation_id: int, db: Session = Depends(get_db), _admin: str = Depends(require_admin)):
     negotiation = get_negotiation_or_404(db, negotiation_id)
-    if negotiation.classification == "qualified":
-        raise HTTPException(status_code=409, detail="优质候选已触发人工接管规则，不能恢复 AI 自动回复")
     if negotiation.classification == "eliminated":
         raise HTTPException(status_code=409, detail="已淘汰供应商不能恢复谈判")
     negotiation.status = "ai_active"
