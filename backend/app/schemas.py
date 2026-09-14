@@ -1,6 +1,9 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.services.scoring import DEFAULT_SCORE_WEIGHTS, SCORE_WEIGHT_KEYS
 
 
 class ProductOut(BaseModel):
@@ -23,6 +26,24 @@ class ProductCreate(BaseModel):
     handoff_score: int = Field(default=82, ge=0, le=100)
     required_qualifications: list[str] = []
     preferred_regions: list[str] = []
+    # 打分模型：custom_rule = 自定义规则（七维满分权重）；ml = 机器学习打分
+    scoring_model: Literal["custom_rule", "ml"] = "custom_rule"
+    score_weights: dict[str, int] = Field(default_factory=lambda: dict(DEFAULT_SCORE_WEIGHTS))
+    # ML 评分（scoring_model=ml 时生效）
+    ml_model: Literal["decision_tree", "logistic_regression"] = "decision_tree"
+    ml_qualify_threshold: float = Field(default=0.5, ge=0, le=1)
+    ml_eliminate_threshold: float = Field(default=0.5, ge=0, le=1)
+
+    @field_validator("score_weights")
+    @classmethod
+    def _check_score_weights(cls, value: dict[str, int]) -> dict[str, int]:
+        if set(value) != set(SCORE_WEIGHT_KEYS):
+            raise ValueError("打分权重必须包含价格、起订量、资质、交期、账期、区域、配合度七项")
+        if any(not (0 <= v <= 100) for v in value.values()):
+            raise ValueError("每个维度的满分须在 0 到 100 之间")
+        if sum(value.values()) != 100:
+            raise ValueError("七个维度的满分之和必须等于 100")
+        return value
 
 
 class ProductUpdate(ProductCreate):
@@ -70,6 +91,11 @@ class RuleOut(BaseModel):
     handoff_score: int
     required_qualifications: list[str]
     preferred_regions: list[str]
+    scoring_model: str
+    score_weights: dict[str, int] | None
+    ml_model: str
+    ml_qualify_threshold: float
+    ml_eliminate_threshold: float
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -82,6 +108,22 @@ class RuleUpdate(BaseModel):
     handoff_score: int = Field(ge=0, le=100)
     required_qualifications: list[str]
     preferred_regions: list[str]
+    scoring_model: Literal["custom_rule", "ml"] = "custom_rule"
+    score_weights: dict[str, int] = Field(default_factory=lambda: dict(DEFAULT_SCORE_WEIGHTS))
+    ml_model: Literal["decision_tree", "logistic_regression"] = "decision_tree"
+    ml_qualify_threshold: float = Field(default=0.5, ge=0, le=1)
+    ml_eliminate_threshold: float = Field(default=0.5, ge=0, le=1)
+
+    @field_validator("score_weights")
+    @classmethod
+    def _check_score_weights(cls, value: dict[str, int]) -> dict[str, int]:
+        if set(value) != set(SCORE_WEIGHT_KEYS):
+            raise ValueError("打分权重必须包含价格、起订量、资质、交期、账期、区域、配合度七项")
+        if any(not (0 <= v <= 100) for v in value.values()):
+            raise ValueError("每个维度的满分须在 0 到 100 之间")
+        if sum(value.values()) != 100:
+            raise ValueError("七个维度的满分之和必须等于 100")
+        return value
 
 
 class SupplierOfferIn(BaseModel):
@@ -100,14 +142,6 @@ class SupplierOfferIn(BaseModel):
     cooperation_rating: int = Field(default=60, ge=0, le=100)
 
 
-class ScoreBreakdown(BaseModel):
-    price: int
-    moq: int
-    qualification: int
-    region: int
-    cooperation: int
-
-
 class EvaluationOut(BaseModel):
     negotiation_id: int | None = None
     hard_pass: bool
@@ -115,7 +149,8 @@ class EvaluationOut(BaseModel):
     score: int
     classification: str
     action: str
-    score_breakdown: ScoreBreakdown
+    # 规则模式：价格/起订量/资质/区域/配合度五维明细；ML 模式：三类概率。
+    score_breakdown: dict[str, int | float] | None = None
 
 
 class ChatIn(BaseModel):
@@ -223,3 +258,22 @@ class MerchantProfileOut(BaseModel):
 
 class MerchantTokenOut(MerchantProfileOut):
     access_token: str
+
+
+class MLPredictIn(BaseModel):
+    """机器学习评分：单条供应商报价 + 规则参数。"""
+    quoted_price: float = Field(gt=0)
+    target_price: float = Field(gt=0)
+    moq: int = Field(gt=0)
+    max_moq: int = Field(gt=0)
+    payment_days: int = Field(ge=0)
+    min_payment_days: int = Field(ge=0)
+    qualifications: list[str] = []
+    model: Literal["decision_tree", "logistic_regression"] = "decision_tree"
+
+
+class MLPredictOut(BaseModel):
+    classification: str
+    score: int
+    probabilities: dict[str, float]
+    model: str

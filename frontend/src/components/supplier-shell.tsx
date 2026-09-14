@@ -58,7 +58,7 @@ export function SupplierShell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <header className="sticky top-0 z-20 flex h-14 items-center justify-end border-b border-[var(--line)] bg-[rgba(245,243,238,.88)] px-4 backdrop-blur-xl sm:px-6">
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-end border-b border-[var(--line)] bg-[rgba(247,248,250,.88)] px-4 backdrop-blur-xl sm:px-6">
         {loggedIn && (
           <div className="relative">
             <button
