@@ -35,7 +35,7 @@ export default function DashboardPage() {
   const metrics = [
     { key: "today" as const, label: "今日接待", value: summary.today_received, note: "今日新提交的供应商", icon: UsersRound },
     { key: "ai" as const, label: "AI 自动谈判中", value: summary.ai_active, note: "当前由 AI 继续沟通", icon: Bot },
-    { key: "qualified" as const, label: "优质候选", value: summary.qualified, note: "已停止自动回复，待接管", icon: PackageCheck },
+    { key: "qualified" as const, label: "优质候选", value: summary.qualified, note: "已达建议接管标准，AI仍在线", icon: PackageCheck },
     { key: "saved" as const, label: "为您节省", value: `${Math.floor(summary.minutes_saved / 60)}h ${summary.minutes_saved % 60}m`, note: "按接待与 AI 回复估算", icon: Clock3 },
   ];
   const visibleItems = useMemo(() => summary.items.filter(item => metric === "saved" || (metric === "today" ? item.is_today : metric === "ai" ? item.status === "ai_active" : item.classification === "qualified")), [metric, summary.items]);

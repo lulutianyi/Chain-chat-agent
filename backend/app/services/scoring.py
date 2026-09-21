@@ -207,7 +207,7 @@ def _weighted_breakdown(
 def classify_supplier(*, hard_pass: bool, score: int, handoff_score: int) -> tuple[str, str]:
     """硬规则拥有最高优先级；通过后，达阈值转人工，其余由 AI 继续谈。"""
     if not hard_pass:
-        return "eliminated", "polite_close"
+        return "eliminated", "continue_ai_recovery"
     if score >= handoff_score:
         return "qualified", "manual_handoff"
     return "negotiating", "continue_ai_negotiation"

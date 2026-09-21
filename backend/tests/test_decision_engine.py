@@ -46,7 +46,7 @@ class DecisionEngineTests(unittest.TestCase):
 
     def test_hard_failure_always_beats_a_high_score(self):
         classification, action = classify_supplier(hard_pass=False, score=100, handoff_score=82)
-        self.assertEqual((classification, action), ("eliminated", "polite_close"))
+        self.assertEqual((classification, action), ("eliminated", "continue_ai_recovery"))
 
 
 if __name__ == "__main__":
