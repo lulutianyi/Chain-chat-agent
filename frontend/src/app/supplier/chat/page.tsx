@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowUp,
@@ -34,6 +34,14 @@ const statusText: Record<string, string> = {
 const MESSAGE_PAGE_SIZE = 10;
 
 export default function SupplierChatPage() {
+  return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">加载中…</div>}>
+      <SupplierChatContent />
+    </Suspense>
+  );
+}
+
+function SupplierChatContent() {
   const [negotiation, setNegotiation] = useState<Negotiation | null>(null);
   const [sessions, setSessions] = useState<Negotiation[] | null>(null);
   const [draft, setDraft] = useState("");
