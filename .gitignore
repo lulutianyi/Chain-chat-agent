@@ -8,6 +8,14 @@ frontend/node_modules/
 frontend/.next/
 frontend/out/
 
+# 影片渲染产物：帧序列与预览图是本地产物，只有编码好的 mp4/封面才入库
+frontend/.demo-frames/
+frontend/.demo-preview/
+frontend/.next-film/
+
+# 本地一次性工具链（scripts/install-ffmpeg.sh 下载的静态 ffmpeg 等），不入库
+.tools/
+
 # Backend
 backend/.venv/
 backend/__pycache__/
@@ -24,3 +32,22 @@ backend/app/ml_models/
 ~$*.docx
 ~$*.xlsx
 ~$*.pptx
+
+# macOS
+.DS_Store
+**/.DS_Store
+# 本地环境变量备份
+backend/.env.bak-*
+
+# Local review artifacts
+backend/package-lock.json
+social-preview.png
+.env.bak-*
+
+# 规划/汇报类文档：保留在本地，不随代码库分发
+*.docx
+
+# 测试覆盖率产物
+.coverage
+.coverage.*
+htmlcov/

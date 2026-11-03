@@ -1,8 +1,13 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import MerchantAccount, Product, ProcurementRule
 from app.security import hash_password
+
+
+# 默认演示商家的绑定邮箱（写死，可后续改成环境变量）。
+DEMO_EMAIL = "admin@liantan.local"
 
 
 DEMO_PRODUCTS = [
@@ -30,11 +35,48 @@ DEMO_PRODUCTS = [
 ]
 
 
-def seed_demo_data(db: Session) -> None:
-    if db.scalar(select(Product.id).limit(1)) is not None:
+def seed_merchant_account(db: Session) -> MerchantAccount:
+    """幂等写入默认演示商家（虚构「小鹿生活馆」），返回该商家行。
+
+    账号 / 手机号 / 密码分别取 MERCHANT_ACCOUNT / MERCHANT_PHONE / MERCHANT_PASSWORD 环境变量，
+    邮箱使用 DEMO_EMAIL（写死）。旧库已有商家但缺这些字段时回填，保证升级后登录与隔离可用。
+    """
+    settings = get_settings()
+    account = db.scalar(select(MerchantAccount).order_by(MerchantAccount.id).limit(1))
+    if account is None:
+        account = MerchantAccount(
+            store_name="小鹿生活馆",
+            logo_emoji="🦌",
+            contact="",
+            category="",
+            account=settings.merchant_account,
+            phone=settings.merchant_phone,
+            email=DEMO_EMAIL,
+            password_hash=hash_password(settings.merchant_password),
+        )
+        db.add(account)
+    else:
+        if not account.account:
+            account.account = settings.merchant_account
+        if not account.phone:
+            account.phone = settings.merchant_phone
+        if not account.email:
+            account.email = DEMO_EMAIL
+    db.commit()
+    return account
+
+
+def seed_demo_data(db: Session, merchant_id: int) -> None:
+    """给指定商家写入 3 个演示商品（若该商家还没有任何商品）。"""
+    if db.scalar(select(Product.id).where(Product.merchant_id == merchant_id).limit(1)) is not None:
         return
     for item in DEMO_PRODUCTS:
-        product = Product(name=item["name"], category=item["category"], description=item["description"])
+        product = Product(
+            merchant_id=merchant_id,
+            name=item["name"],
+            category=item["category"],
+            description=item["description"],
+        )
         db.add(product)
         db.flush()
         db.add(
@@ -50,19 +92,3 @@ def seed_demo_data(db: Session) -> None:
     db.commit()
     if db.bind and db.bind.dialect.name == "sqlite":
         db.connection().exec_driver_sql("PRAGMA optimize")
-
-
-def seed_merchant_account(db: Session) -> None:
-    """幂等写入唯一采购方账号（虚构「小鹿生活馆」），默认密码 链谈Agent123，可在账号安全里改。"""
-    if db.scalar(select(MerchantAccount.id).limit(1)) is not None:
-        return
-    db.add(
-        MerchantAccount(
-            store_name="小鹿生活馆",
-            logo_emoji="🦌",
-            contact="",
-            category="",
-            password_hash=hash_password("链谈Agent123"),
-        )
-    )
-    db.commit()

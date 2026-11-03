@@ -16,8 +16,12 @@ SYSTEM_PROMPT = """
 回复只写1至2句话，不超过80个汉字。语气真诚、平等、专业，像真实采购人员聊天。不得虚构事实，不得擅自承诺下单、签约、付款或突破程序给出的采购底线。
 """.strip()
 
-# 接口失败时明确告知系统状态，避免把程序兜底误认为模型回答。
+# 接口失败时的兜底文案。注意：它只是「内部标记 + 给评测用的原文」，
+# 不允许作为 AI 发言写进谈判记录（调用方需按 mode 判断，见 main.py）。
 FALLBACK_REPLY = "模型服务暂时不可用，本轮未生成谈判回复，请稍后重试。"
+
+# 模型不可用时写入会话的系统事件文案，由前端渲染为提示条而非 AI 气泡。
+SERVICE_UNAVAILABLE_NOTICE = "AI 服务暂时不可用，本轮未生成回复。供应商的消息已记录，服务恢复后会自动继续洽谈。"
 
 TERMS_PROMPT = """
 请严格输出一个 JSON 对象，不要使用 Markdown。reply 字段仍按系统提示自由回复；另外只提取供应商最新发言中明确给出的数字，未提及的字段填 null：
@@ -119,13 +123,13 @@ async def generate_negotiation_turn(
 
 async def generate_negotiation_reply(
     *, supplier_message: str, decision_context: str, history: list[dict] | None = None,
-) -> str:
-    turn = await generate_negotiation_turn(
+) -> NegotiationTurn:
+    """与 generate_negotiation_turn 等价，保留此别名以兼容既有调用与测试。"""
+    return await generate_negotiation_turn(
         supplier_message=supplier_message,
         decision_context=decision_context,
         history=history,
     )
-    return turn.reply
 
 
 async def generate_opening_message(
@@ -140,9 +144,9 @@ async def generate_opening_message(
     max_lead_days: int,
     payment_days: int,
     min_payment_days: int,
-) -> str:
+) -> NegotiationTurn:
     """供应商提交方案后，由采购模型自由生成开场消息。"""
-    turn = await generate_negotiation_turn(
+    return await generate_negotiation_turn(
         supplier_message="这是新会话，请由采购方先发一条消息。",
         decision_context=(
             f"供应商：{supplier_name}；商品：{product_name}；报价 ¥{quoted_price:g}，目标价 ¥{target_price:g}；"
@@ -150,7 +154,6 @@ async def generate_opening_message(
             f"账期 {payment_days} 天，最低期望 {min_payment_days} 天。"
         ),
     )
-    return turn.reply
 
 
 async def generate_boundary_recovery_reply(
@@ -162,7 +165,7 @@ async def generate_boundary_recovery_reply(
     previous_moq: int | None = None,
     previous_lead_days: int | None = None,
     previous_payment_days: int | None = None,
-) -> str:
+) -> NegotiationTurn:
     """最新组合触碰底线时，让模型在明确边界内继续协商。"""
     previous = ""
     if previous_price is not None:
@@ -170,11 +173,10 @@ async def generate_boundary_recovery_reply(
             f"上一轮可继续协商的条件：报价 ¥{previous_price:g}/件、起订量 {previous_moq} 件、"
             f"交期 {previous_lead_days} 天、账期 {previous_payment_days} 天。"
         )
-    turn = await generate_negotiation_turn(
+    return await generate_negotiation_turn(
         supplier_message=supplier_message,
         history=history,
         decision_context=(
             f"最新方案触碰采购底线：{'；'.join(reasons)}。当前方案不能接受，但会话继续。{previous}"
         ),
     )
-    return turn.reply

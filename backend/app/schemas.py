@@ -1,9 +1,20 @@
+import re
 from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.services.scoring import DEFAULT_SCORE_WEIGHTS, SCORE_WEIGHT_KEYS
+
+EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+
+def normalize_email(value: str) -> str:
+    """邮箱统一去空格 + 小写；格式不合法时抛出可直接展示的中文错误。"""
+    value = value.strip().lower()
+    if not EMAIL_RE.fullmatch(value):
+        raise ValueError("邮箱格式不正确")
+    return value
 
 
 class ProductOut(BaseModel):
@@ -65,6 +76,9 @@ class DashboardItem(BaseModel):
     status: str
     classification: str
     is_today: bool
+    # 提交时间与最近活跃时间：前端据此展示日期、排序与做时间范围说明。
+    created_at: datetime
+    last_activity_at: datetime
 
 
 class DashboardSummary(BaseModel):
@@ -73,6 +87,9 @@ class DashboardSummary(BaseModel):
     qualified: int
     minutes_saved: int
     items: list[DashboardItem]
+    # 统计口径：range_days = 0 表示全部历史；range_received 为本口径下新提交的会话数。
+    range_days: int = 0
+    range_received: int = 0
 
 
 class DialogueEvaluationIn(BaseModel):
@@ -217,8 +234,10 @@ class SupplierCodeRequest(BaseModel):
 
 class SupplierCodeOut(BaseModel):
     phone: str
-    code: str
+    # 仅演示模式（DEMO_MODE=true）下才会带上验证码；正式环境应接入短信服务并留空。
+    code: str | None = None
     expires_in: int
+    demo_mode: bool = False
 
 
 class SupplierLoginRequest(BaseModel):
@@ -231,8 +250,77 @@ class SupplierTokenOut(BaseModel):
     phone: str
 
 
-class MerchantLoginIn(BaseModel):
+class MerchantPasswordLoginIn(BaseModel):
+    account: str = Field(min_length=1, max_length=80)
     password: str = Field(min_length=1, max_length=200)
+
+
+class MerchantCodeRequest(BaseModel):
+    phone: str = Field(min_length=11, max_length=11, pattern=r"^\d{11}$")
+
+
+class MerchantCodeLoginIn(BaseModel):
+    phone: str = Field(min_length=11, max_length=11, pattern=r"^\d{11}$")
+    code: str = Field(min_length=6, max_length=6)
+
+
+class MerchantCodeOut(BaseModel):
+    phone: str
+    code: str | None = None
+    expires_in: int
+    demo_mode: bool = False
+    # 该手机号是否已绑定商家账号。演示模式下未绑定也会发演示码（登录时为其开一个演示工作台），
+    # 前端据此提前说明，避免用户拿到码却在登录时才发现「未绑定」。旧后端不返回该字段。
+    registered: bool = True
+
+
+class MerchantForgotPasswordIn(BaseModel):
+    email: str = Field(min_length=3, max_length=160)
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, value: str) -> str:
+        return normalize_email(value)
+
+
+class MerchantForgotPasswordOut(BaseModel):
+    # 无论邮箱是否存在都返回同样的成功响应，避免被用来枚举商家账号。
+    ok: bool = True
+    expires_in: int
+
+
+class MerchantVerifyResetCodeIn(BaseModel):
+    email: str = Field(min_length=3, max_length=160)
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, value: str) -> str:
+        return normalize_email(value)
+
+
+class MerchantVerifyResetCodeOut(BaseModel):
+    reset_token: str
+    expires_in: int
+
+
+class MerchantResetPasswordIn(BaseModel):
+    reset_token: str = Field(min_length=20, max_length=200)
+    new_password: str = Field(min_length=1, max_length=200)
+
+
+class MerchantRegisterIn(BaseModel):
+    account: str = Field(min_length=3, max_length=80, pattern=r"^[A-Za-z0-9_]+$")
+    password: str = Field(min_length=1, max_length=200)
+    store_name: str = Field(min_length=1, max_length=120)
+    phone: str = Field(min_length=11, max_length=11, pattern=r"^\d{11}$")
+    email: str = Field(min_length=3, max_length=160)
+    agree_terms: bool
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, value: str) -> str:
+        return normalize_email(value)
 
 
 class MerchantPasswordIn(BaseModel):

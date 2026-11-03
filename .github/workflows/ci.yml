@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支的新推送取消上一次仍在跑的构建，避免浪费额度。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端（pytest）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: 安装依赖
+        run: pip install -r requirements-dev.txt
+      - name: 运行测试
+        # 测试全部使用内存数据库并 mock 外部服务，不会真实调用大模型或百度接口。
+        # 覆盖率门槛按当前实际水平（71%）设置，留出余量以免偶发波动挡路；
+        # 方案里写的 80% 目标尚未达到，差距主要在 ml_scoring 与 main 路由层。
+        run: python -m pytest tests/ -q --cov=app --cov-report=term-missing --cov-fail-under=70
+
+  frontend:
+    name: 前端（类型 / Lint / 构建）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 安装依赖
+        run: npm ci
+      - name: 类型检查
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: 生产构建
+        env:
+          # 构建期需要，避免 metadataBase 取到空值；真实部署由平台注入。
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+        run: npm run build

@@ -83,7 +83,7 @@ def run_rule_evaluation() -> dict[str, Any]:
         results.append({
             "case_id": case["用例ID"], "group": case["规则组"], "supplier": case["供应商名称"],
             "product": case["供应商品名称"], "expected": expected, "actual": actual, "matched": matched,
-            "score": score.total, "reasons": hard.reasons,
+            "score": score.total, "reasons": hard.reasons, "reason_codes": hard.reason_codes,
         })
     matched_count = sum(item["matched"] for item in results)
     return {
@@ -93,6 +93,8 @@ def run_rule_evaluation() -> dict[str, Any]:
         "groups": [{"group": key, **value, "accuracy": round(value["matched"] / value["total"] * 100, 1)} for key, value in sorted(by_group.items())],
         "mismatches": [item for item in results if not item["matched"]][:100],
         "notes": ["数据集没有交期字段，本轮按交期满分处理。", "账期按“供应商提供的账期不得低于最低可接受天数”执行。", "供应商规模目前未参与评分。", "测评数据不会写入正式供应商与谈判表。"],
+        # 多语言展示用：notes 保留中文原文；前端优先按 key 取当前语言的文案。
+        "note_keys": ["no_lead_time_field", "payment_floor", "supplier_size_not_scored", "isolated_data"],
     }
 
 

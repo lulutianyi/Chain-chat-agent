@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -10,7 +10,8 @@ class Product(Base):
     __tablename__ = "products"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("merchant_accounts.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120), index=True)
     category: Mapped[str] = mapped_column(String(80), index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
@@ -46,6 +47,7 @@ class Supplier(Base):
     __tablename__ = "suppliers"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("merchant_accounts.id"), index=True)
     company_name: Mapped[str] = mapped_column(String(160), index=True)
     contact_name: Mapped[str] = mapped_column(String(80))
     phone: Mapped[str] = mapped_column(String(40))
@@ -66,6 +68,7 @@ class Negotiation(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("merchant_accounts.id"), index=True)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
     supplier_id: Mapped[int] = mapped_column(ForeignKey("suppliers.id"), index=True)
     quoted_price: Mapped[float] = mapped_column(Float)
@@ -92,6 +95,12 @@ class QualificationFile(Base):
     original_name: Mapped[str] = mapped_column(String(255))
     stored_name: Mapped[str] = mapped_column(String(128))
     content_type: Mapped[str] = mapped_column(String(128), default="")
+    # 文件字节直接入库（SQLite 用 BLOB / PostgreSQL 用 BYTEA）：云主机磁盘不持久，改存数据库避免重启丢失。
+    #
+    # deferred=True：列表类接口（谈判列表、供应商谈判、仪表盘）都会 selectinload 资质文件，
+    # 但响应模型里根本没有 data 字段——不延迟加载的话，每次列会话都会把
+    # 所有附件（单个上限 5MB）读进内存再丢掉。只有真正下载文件时才触发这一列的查询。
+    data: Mapped[bytes] = mapped_column(LargeBinary, default=b"", deferred=True)
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     # OCR 自动核验结果：not_checked / passed / mismatch / not_applicable / unavailable
@@ -123,8 +132,29 @@ class SupplierAuth(Base):
     last_login_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class PasswordResetChallenge(Base):
+    """找回密码挑战：先发邮箱验证码，验证通过后换一次性重置令牌。
+
+    验证码用慢哈希保存，令牌用 SHA-256 保存；两者都不落明文。
+    每次请求先清掉该商家未完成的旧挑战，避免多封邮件里的验证码同时有效。
+    """
+
+    __tablename__ = "password_reset_challenges"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    merchant_id: Mapped[int] = mapped_column(ForeignKey("merchant_accounts.id"), index=True)
+    email: Mapped[str] = mapped_column(String(160), index=True)
+    code_hash: Mapped[str] = mapped_column(String(255))
+    token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class MerchantAccount(Base):
-    """采购方（商家）账号：单商家演示，仅一行。密码哈希 + 登录令牌 + 个人资料。"""
+    """采购方（商家）账号：多商家，每个商家一行。账号/手机号/邮箱全局唯一。"""
 
     __tablename__ = "merchant_accounts"
 
@@ -134,5 +164,8 @@ class MerchantAccount(Base):
     logo_image: Mapped[str] = mapped_column(Text, default="")
     contact: Mapped[str] = mapped_column(String(80), default="")
     category: Mapped[str] = mapped_column(String(255), default="")
+    account: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    phone: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(160), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), default="")
     access_token: Mapped[str | None] = mapped_column(String(80), nullable=True)

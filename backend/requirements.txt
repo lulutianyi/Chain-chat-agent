@@ -1,11 +1,11 @@
 fastapi==0.115.8
 uvicorn[standard]==0.34.0
 sqlalchemy==2.0.38
+alembic==1.20.0
 pydantic==2.10.6
 pydantic-settings==2.7.1
 httpx==0.28.1
 psycopg[binary]==3.2.5
 python-multipart==0.0.20
-pytest==9.1.1
 scikit-learn==1.6.1
 joblib==1.4.2

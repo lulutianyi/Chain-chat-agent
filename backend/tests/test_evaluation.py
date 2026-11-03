@@ -8,6 +8,14 @@ def test_datasets_and_rule_evaluation_are_isolated_and_complete():
     assert result["total"] == 1500
     assert result["matched"] + (result["total"] - result["matched"]) == 1500
     assert len(result["groups"]) == 5
+    # 多语言展示：固定说明用 key，硬规则原因用结构化 code，前端才能翻译。
+    assert result["note_keys"] == [
+        "no_lead_time_field",
+        "payment_floor",
+        "supplier_size_not_scored",
+        "isolated_data",
+    ]
+    assert all("reason_codes" in item for item in result["mismatches"])
 
 
 def test_dialogue_screening_checks_strategy_and_safety():

@@ -1,6 +1,10 @@
 // 商家必备资质与供应商资质勾选共用同一组选项，保证两端判断口径一致。
 export const QUALIFICATION_OPTIONS = ["营业执照", "质检报告", "可开发票"];
 
+// 开发调试能力总开关（免登录调试入口、模拟供应商视角、管理员令牌兜底）。
+// 由构建期环境变量控制，公开部署不设置即为关闭；开启方式见 .env.example。
+export const DEBUG_TOOLS_ENABLED = process.env.NEXT_PUBLIC_SHOW_DEBUG_ENTRY === "true";
+
 // 打分模型：custom_rule = 自定义规则（七维满分权重），ml = 机器学习打分。
 export const SCORING_MODEL_OPTIONS = [
   { value: "custom_rule", label: "自定义规则模式" },

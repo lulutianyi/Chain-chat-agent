@@ -1,0 +1,71 @@
+# Render Blueprint —— 一键部署后端 FastAPI 服务。
+# 用法：Render 控制台 → New → Blueprint → 连接本仓库，Render 会自动读取此文件。
+# 需要你在部署过程中填写的值（sync: false）会弹出输入框；其余用默认值即可。
+services:
+  - type: web
+    name: liantan-backend
+    runtime: python
+    # 部署分支显式钉在 main。线上曾经把服务改成跟踪某个版本分支，之后只提交到 main
+    # 的修复（包括新增的商家端取码接口）永远上不了线，表现为前端「后端还停在旧版本」。
+    branch: main
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    # 健康检查用就绪探针：它会真的探一次数据库。
+    # 原来指向 /docs，数据库断了平台也认为服务健康，既不重启也不告警。
+    healthCheckPath: /api/health/ready
+    envVars:
+      # 前端部署后的网址，例如 https://your-app.vercel.app（用于 CORS，必填）
+      - key: FRONTEND_ORIGIN
+        sync: false
+      # Supabase 数据库连接串，格式：postgresql+psycopg://USER:PASSWORD@HOST:5432/postgres（必填）
+      - key: DATABASE_URL
+        sync: false
+      # 大模型密钥（选填：不填则用本地可重复演示回复）
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_MODEL
+        value: deepseek-chat
+      - key: DEEPSEEK_BASE_URL
+        value: https://api.deepseek.com
+      # 百度 OCR（选填：不填则资质上传转人工核验）
+      - key: BAIDU_API_KEY
+        sync: false
+      - key: BAIDU_SECRET_KEY
+        sync: false
+      # 找回密码邮件（选填：不填则找回密码接口返回 503，账号密码登录不受影响）
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: SMTP_STARTTLS
+        value: "true"
+      - key: SMTP_SSL
+        value: "false"
+      # 商家初始登录密码（必填，公开部署务必改成强密码）
+      - key: MERCHANT_PASSWORD
+        sync: false
+      # 演示用管理员令牌：留空即禁用该兜底鉴权，公开部署必须留空
+      - key: ADMIN_TOKEN
+        sync: false
+      # 运行环境：dev / prod。当前是公开演示站，保持 dev。
+      # 正式运营时把 ENVIRONMENT 改成 prod——届时启动会强制自检：
+      # DEMO_MODE 必须为 false、DATABASE_URL 不能是 SQLite、ADMIN_TOKEN 必须留空、
+      # MERCHANT_PASSWORD 不能是默认值、FRONTEND_ORIGIN 必须是 https，任一不满足都拒绝启动。
+      - key: ENVIRONMENT
+        value: dev
+      # 演示模式：验证码不发送短信、直接回给前端。
+      # 本站尚未接入短信服务，因此公开演示必须保持 true，否则供应商无法登录。
+      # 接入短信服务后改为 false，并把 ENVIRONMENT 切到 prod。
+      - key: DEMO_MODE
+        value: "true"
+      # 日志格式：auto（prod 输出 JSON，dev 输出可读格式）/ json / text
+      - key: LOG_FORMAT
+        value: auto

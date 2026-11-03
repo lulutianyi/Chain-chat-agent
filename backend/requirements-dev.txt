@@ -1,0 +1,4 @@
+# 开发与测试依赖（生产部署只需要 requirements.txt）
+-r requirements.txt
+pytest==9.1.1
+pytest-cov==7.1.0

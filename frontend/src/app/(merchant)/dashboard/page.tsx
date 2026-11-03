@@ -2,89 +2,379 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Archive, Bot, Check, ChevronRight, Clock3, PackageCheck, PackagePlus, Pencil, RefreshCw, Save, UsersRound, X } from "lucide-react";
+import {
+  Bot,
+  ChevronRight,
+  Clock3,
+  Info,
+  PackageCheck,
+  PackagePlus,
+  RefreshCw,
+  UsersRound,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { createProduct, disableProduct, getDashboardSummary, getManagedProducts, updateProduct, type DashboardSummary, type ManagedProduct } from "@/lib/api";
+import { ProductLibraryDrawer } from "@/components/product-library-drawer";
+import { getDashboardSummary, type DashboardItem, type DashboardSummary } from "@/lib/api";
+import { localeTag } from "@/lib/i18n/config";
+import { useI18n } from "@/lib/i18n/client";
+import { format } from "@/lib/i18n/types";
 import { cn } from "@/lib/utils";
-import { DEFAULT_SCORE_WEIGHTS, QUALIFICATION_OPTIONS, SCORE_DIMENSIONS, SCORING_MODEL_OPTIONS } from "@/lib/constants";
 
 type MetricKey = "today" | "ai" | "qualified" | "saved";
-const emptySummary: DashboardSummary = { today_received: 0, ai_active: 0, qualified: 0, minutes_saved: 0, items: [] };
-const blankWeights = Object.fromEntries(SCORE_DIMENSIONS.map(item => [item.key, String(item.default)]));
-const blankProduct = { name: "", category: "", description: "", target_price: "", hard_max_price: "", max_moq: "", max_lead_days: "14", max_payment_days: "30", handoff_score: "82", required_qualifications: ["营业执照", "质检报告"] as string[], preferred_regions: "", scoring_model: "custom_rule", score_weights: { ...blankWeights }, ml_model: "decision_tree", ml_qualify_threshold: "0.5", ml_eliminate_threshold: "0.5" };
+type SortKey = "recent" | "score" | "price" | "moq";
+type RangeKey = "all" | "d7" | "d30" | "d90";
+
+const PAGE_SIZE = 10;
+
+const RANGES: { days: number; key: RangeKey }[] = [
+  { days: 0, key: "all" },
+  { days: 7, key: "d7" },
+  { days: 30, key: "d30" },
+  { days: 90, key: "d90" },
+];
+
+/** 排序项的 key 与词典 sorts 的键一一对应，展示名直接取词典。 */
+const SORTS: SortKey[] = ["recent", "score", "price", "moq"];
+
+const emptySummary: DashboardSummary = {
+  today_received: 0, ai_active: 0, qualified: 0, minutes_saved: 0,
+  items: [], range_days: 0, range_received: 0,
+};
+
+// 中文语境下不用 0h 30m 这类英文单位；不足 1 小时只显示分钟。
+// 单位写法随语言变化，由调用方把词典里的 duration 传进来。
+function formatMinutes(minutes: number, units: { minutes: string; hours: string; hoursMinutes: string }): string {
+  const total = Math.max(0, Math.round(minutes));
+  if (total < 60) return format(units.minutes, { n: total });
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  return rest
+    ? format(units.hoursMinutes, { h: hours, m: rest })
+    : format(units.hours, { n: hours });
+}
+
+function matchesMetric(item: DashboardItem, metric: MetricKey): boolean {
+  if (metric === "today") return item.is_today;
+  if (metric === "ai") return item.status === "ai_active";
+  if (metric === "qualified") return item.classification === "qualified";
+  return true;
+}
 
 export default function DashboardPage() {
+  const { locale, d } = useI18n();
+  const t = d.merchant.dashboard;
   const [summary, setSummary] = useState<DashboardSummary>(emptySummary);
   const [online, setOnline] = useState(true);
   const [metric, setMetric] = useState<MetricKey>("today");
+  const [days, setDays] = useState(0);
+  const [sort, setSort] = useState<SortKey>("recent");
+  const [page, setPage] = useState(1);
+  const [showCostBasis, setShowCostBasis] = useState(false);
   const [productsOpen, setProductsOpen] = useState(false);
-  const [products, setProducts] = useState<ManagedProduct[]>([]);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState(blankProduct);
-  const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState("");
 
-  const refresh = useCallback(async () => { try { setSummary(await getDashboardSummary()); setOnline(true); } catch { setOnline(false); } }, []);
-  const loadProducts = useCallback(async () => { try { setProducts(await getManagedProducts()); setOnline(true); } catch { setOnline(false); } }, []);
-  useEffect(() => { void refresh(); }, [refresh]);
+  const refresh = useCallback(async (rangeDays: number) => {
+    try {
+      setSummary(await getDashboardSummary(rangeDays));
+      setOnline(true);
+    } catch {
+      setOnline(false);
+    }
+  }, []);
+
+  useEffect(() => { void refresh(days); }, [refresh, days]);
+  // 切换口径或指标后回到第一页，避免停在空白页。
+  useEffect(() => { setPage(1); }, [metric, days, sort]);
+
+  function statusLabel(item: DashboardItem): string {
+    if (item.status === "ai_active") return t.status.aiActive;
+    if (item.classification === "qualified") return t.status.qualified;
+    if (item.status === "human_active") return t.status.humanActive;
+    return t.status.closed;
+  }
 
   const metrics = [
-    { key: "today" as const, label: "今日接待", value: summary.today_received, note: "今日新提交的供应商", icon: UsersRound },
-    { key: "ai" as const, label: "AI 自动谈判中", value: summary.ai_active, note: "当前由 AI 继续沟通", icon: Bot },
-    { key: "qualified" as const, label: "优质候选", value: summary.qualified, note: "已达建议接管标准，AI仍在线", icon: PackageCheck },
-    { key: "saved" as const, label: "为您节省", value: `${Math.floor(summary.minutes_saved / 60)}h ${summary.minutes_saved % 60}m`, note: "按接待与 AI 回复估算", icon: Clock3 },
+    { key: "today" as const, label: t.metrics.today, value: String(summary.today_received), note: t.metrics.todayNote, icon: UsersRound },
+    { key: "ai" as const, label: t.metrics.ai, value: String(summary.ai_active), note: t.metrics.aiNote, icon: Bot },
+    { key: "qualified" as const, label: t.metrics.qualified, value: String(summary.qualified), note: t.metrics.qualifiedNote, icon: PackageCheck },
+    { key: "saved" as const, label: t.metrics.saved, value: formatMinutes(summary.minutes_saved, t.duration), note: t.metrics.savedNote, icon: Clock3 },
   ];
-  const visibleItems = useMemo(() => summary.items.filter(item => metric === "saved" || (metric === "today" ? item.is_today : metric === "ai" ? item.status === "ai_active" : item.classification === "qualified")), [metric, summary.items]);
-  const selectedMetric = metrics.find(item => item.key === metric)!;
-  const weightTotal = SCORE_DIMENSIONS.reduce((sum, item) => sum + (Number(form.score_weights[item.key]) || 0), 0);
-  const weightValid = weightTotal === 100;
-  const canSave = !saving && form.name && form.category && form.target_price && form.hard_max_price && form.max_moq && (form.scoring_model !== "custom_rule" || weightValid);
+  const selectedMetric = metrics.find((item) => item.key === metric)!;
 
-  function editProduct(product?: ManagedProduct) {
-    if (!product) { setEditingId(null); setForm(blankProduct); return; }
-    setEditingId(product.id);
-    const weightStrings = Object.fromEntries(SCORE_DIMENSIONS.map(item => [item.key, String(product.score_weights?.[item.key] ?? item.default)]));
-    setForm({ name: product.name, category: product.category, description: product.description, target_price: String(product.target_price), hard_max_price: String(product.hard_max_price), max_moq: String(product.max_moq), max_lead_days: String(product.max_lead_days), max_payment_days: String(product.max_payment_days), handoff_score: String(product.handoff_score), required_qualifications: product.required_qualifications, preferred_regions: product.preferred_regions.join(","), scoring_model: product.scoring_model, score_weights: { ...weightStrings }, ml_model: product.ml_model, ml_qualify_threshold: String(product.ml_qualify_threshold), ml_eliminate_threshold: String(product.ml_eliminate_threshold) });
-  }
-  async function saveProduct() {
-    setSaving(true); setNotice("");
-    const weightNumbers = Object.fromEntries(SCORE_DIMENSIONS.map(item => [item.key, Number(form.score_weights[item.key]) || 0]));
-    const base = { name: form.name.trim(), category: form.category.trim(), description: form.description.trim(), target_price: Number(form.target_price), hard_max_price: Number(form.hard_max_price), max_moq: Number(form.max_moq), max_lead_days: Number(form.max_lead_days), max_payment_days: Number(form.max_payment_days), handoff_score: Number(form.handoff_score), required_qualifications: form.required_qualifications, preferred_regions: form.preferred_regions.split(/[,，]/).map(v => v.trim()).filter(Boolean), scoring_model: form.scoring_model as "custom_rule" | "ml", score_weights: form.scoring_model === "ml" ? { ...DEFAULT_SCORE_WEIGHTS } : weightNumbers, ml_model: form.ml_model, ml_qualify_threshold: Number(form.ml_qualify_threshold), ml_eliminate_threshold: Number(form.ml_eliminate_threshold) };
-    try {
-      const wasEditing = editingId !== null;
-      if (editingId) { const old = products.find(p => p.id === editingId)!; await updateProduct(editingId, { ...base, active: old.active }); } else await createProduct(base);
-      await loadProducts(); editProduct(); setNotice(wasEditing ? "商品已更新" : "商品已添加");
-    } catch (error) { setNotice(error instanceof Error ? error.message : "保存失败"); } finally { setSaving(false); }
-  }
-  async function toggleProduct(product: ManagedProduct) {
-    try {
-      if (product.active) await disableProduct(product.id); else await updateProduct(product.id, { ...product, active: true });
-      await loadProducts(); setNotice(product.active ? "商品已停用，历史记录保留" : "商品已重新启用");
-    } catch (error) { setNotice(error instanceof Error ? error.message : "操作失败"); }
-  }
+  const visibleItems = useMemo(() => {
+    const filtered = summary.items.filter((item) => matchesMetric(item, metric));
+    const sorted = [...filtered];
+    sorted.sort((a, b) => {
+      if (sort === "score") return b.score - a.score;
+      if (sort === "price") return a.price - b.price;
+      if (sort === "moq") return a.moq - b.moq;
+      return new Date(b.last_activity_at).getTime() - new Date(a.last_activity_at).getTime();
+    });
+    return sorted;
+  }, [summary.items, metric, sort]);
 
-  return <div className="animate-rise space-y-6">
-    <section className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><div className="mb-2 flex items-center gap-2 text-xs font-semibold text-[var(--accent-strong)]"><span className="h-px w-5 bg-[var(--accent)]" />商家管理后台</div><h1 className="text-2xl font-bold tracking-tight sm:text-3xl">采购工作台</h1><p className="mt-2 text-sm text-[var(--muted)]">统计由真实接待和谈判记录自动生成，点击卡片可查看对应明细。</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => void refresh()}><RefreshCw className="size-4" />刷新</Button><Button variant="accent" onClick={() => { setProductsOpen(true); void loadProducts(); editProduct(); }}><PackagePlus className="size-4" />商品库管理</Button></div></section>
-    {!online && <div className="rounded-xl border border-[var(--warning)]/20 bg-[var(--warning-faint)] px-4 py-3 text-sm text-[var(--warning)]">后端暂未连接，当前不展示虚构数据。请启动后端后刷新。</div>}
-    <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{metrics.map((s, i) => <button key={s.key} onClick={() => setMetric(s.key)} className="text-left"><Card className={cn("h-full transition hover:-translate-y-0.5 hover:shadow-md", metric === s.key && "border-[var(--accent)] ring-2 ring-[var(--accent-faint)]")}><CardContent className="p-5"><s.icon className={cn("size-5", i === 2 ? "text-[var(--success)]" : "text-[var(--accent)]")} /><div className="mt-5 text-3xl font-bold">{s.value}</div><div className="mt-1 text-sm font-semibold">{s.label}</div><div className="mt-3 flex items-center justify-between text-xs text-[var(--muted)]"><span>{s.note}</span><ChevronRight className="size-4" /></div></CardContent></Card></button>)}</section>
-    <Card><CardHeader className="flex flex-row items-start justify-between"><div><h2 className="font-bold">{selectedMetric.label}明细</h2><p className="mt-1 text-xs text-[var(--muted)]">数据来自供应商提交与谈判状态，统计值本身无需手工修改。</p></div><Badge>{visibleItems.length} 条</Badge></CardHeader><CardContent className="pt-2">{metric === "saved" && <div className="mb-4 rounded-xl bg-[var(--paper)] p-4 text-xs leading-5 text-[var(--muted)]">节省时间采用透明估算：每次自动接待计 5 分钟，每条 AI 回复计 3 分钟。下方列出参与估算的记录。</div>}{visibleItems.length ? <div className="divide-y divide-[var(--line)]">{visibleItems.map(item => <div key={item.id} className="grid gap-3 py-4 sm:grid-cols-[1.2fr_1fr_.5fr_.7fr_auto] sm:items-center"><div><div className="text-sm font-semibold">{item.supplier}</div><div className="text-xs text-[var(--muted)]">{item.product}</div></div><div className="text-sm">¥{item.price} · {item.moq} 件</div><div className="font-bold">{item.score} 分</div><Badge className="w-fit">{item.status === "ai_active" ? "AI 谈判中" : item.classification === "qualified" ? "待人工接管" : "已结束"}</Badge><Link href={`/negotiate?id=${item.id}`} className="grid size-8 place-items-center rounded-lg border border-[var(--line)]"><ChevronRight className="size-4" /></Link></div>)}</div> : <div className="py-10 text-center text-sm text-[var(--muted)]">当前没有符合该栏目的真实记录</div>}</CardContent></Card>
-    {productsOpen && <div className="fixed inset-0 z-50 flex justify-end bg-[var(--ink)]/35 backdrop-blur-sm" onMouseDown={() => setProductsOpen(false)}><div className="h-full w-full max-w-3xl overflow-y-auto bg-[var(--paper)] p-6 shadow-2xl" onMouseDown={e => e.stopPropagation()}><div className="flex items-start justify-between"><div><div className="text-xs font-semibold text-[var(--accent-strong)]">采购需求库</div><h2 className="mt-1 text-2xl font-bold">商品库管理</h2><p className="mt-2 text-sm text-[var(--muted)]">启用的商品会立即出现在供应商入口；停用只隐藏商品，不删除历史记录。</p></div><button onClick={() => setProductsOpen(false)} className="grid size-9 place-items-center rounded-xl border bg-white"><X className="size-4" /></button></div>
-      {notice && <div className="mt-4 rounded-xl bg-[var(--accent-faint)] px-4 py-3 text-sm">{notice}</div>}
-      <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_1.15fr]"><div className="space-y-3"><div className="flex items-center justify-between"><h3 className="font-bold">已有商品</h3><Button size="sm" variant="outline" onClick={() => editProduct()}><PackagePlus className="size-4" />新增</Button></div>{products.map(product => <Card key={product.id} className={cn(!product.active && "opacity-55")}><CardContent className="p-4"><div className="flex items-start justify-between gap-3"><div><div className="font-semibold">{product.name}</div><div className="mt-1 text-xs text-[var(--muted)]">{product.category} · 目标 ¥{product.target_price} · 起订上限 {product.max_moq}</div></div><Badge>{product.active ? "启用" : "停用"}</Badge></div><div className="mt-3 flex gap-2"><Button size="sm" variant="outline" onClick={() => editProduct(product)}><Pencil className="size-3.5" />编辑</Button><Button size="sm" variant="outline" onClick={() => void toggleProduct(product)}><Archive className="size-3.5" />{product.active ? "停用" : "启用"}</Button></div></CardContent></Card>)}</div>
-      <div><h3 className="font-bold">{editingId ? "修改商品" : "添加商品"}</h3><div className="mt-4 grid gap-4 sm:grid-cols-2"><Field label="商品名称" value={form.name} set={v => setForm({...form,name:v})}/><Field label="商品分类" value={form.category} set={v => setForm({...form,category:v})}/><Field label="目标采购价" value={form.target_price} set={v => setForm({...form,target_price:v})} number/><Field label="硬性价格上限" value={form.hard_max_price} set={v => setForm({...form,hard_max_price:v})} number/><Field label="最高起订量" value={form.max_moq} set={v => setForm({...form,max_moq:v})} number/><Field label="最长交期（天）" value={form.max_lead_days} set={v => setForm({...form,max_lead_days:v})} number/><Field label="最低账期（天）" value={form.max_payment_days} set={v => setForm({...form,max_payment_days:v})} number/><div className="sm:col-span-2"><label><span className="text-xs font-semibold">打分模型</span><select value={form.scoring_model} onChange={e => setForm({ ...form, scoring_model: e.target.value })} className="mt-2 h-10 w-full rounded-xl border border-[var(--line)] bg-white px-3 text-sm text-[var(--ink)] outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-faint)]">{SCORING_MODEL_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></label></div>{form.scoring_model === "custom_rule" ? <><div className="sm:col-span-2"><Field label="转人工分数" value={form.handoff_score} set={v => setForm({...form,handoff_score:v})} number /></div><div className="sm:col-span-2"><div className="flex items-center justify-between"><span className="text-xs font-semibold">百分制打分权重（七维满分，总和须为 100）</span><span className={cn("text-xs font-bold", weightValid ? "text-[var(--success)]" : "text-[var(--danger)]")}>合计 {weightTotal}</span></div><div className="mt-2 grid gap-2 sm:grid-cols-2">{SCORE_DIMENSIONS.map(item => <Field key={item.key} label={item.label} value={form.score_weights[item.key] ?? ""} set={v => setForm({ ...form, score_weights: { ...form.score_weights, [item.key]: v } })} number />)}</div>{!weightValid && <p className="mt-2 text-xs text-[var(--danger)]">七个维度的满分之和必须等于 100，当前为 {weightTotal}。</p>}</div></> : <div className="sm:col-span-2"><div className="rounded-xl bg-[var(--paper)] p-3 text-xs leading-5 text-[var(--muted)]">默认决策树为主模型，逻辑回归结果仅作对照。</div><div className="mt-3 space-y-3"><ThresholdSlider label="转人工概率门槛" value={form.ml_qualify_threshold} set={v => setForm({ ...form, ml_qualify_threshold: v })} /><ThresholdSlider label="淘汰概率门槛" value={form.ml_eliminate_threshold} set={v => setForm({ ...form, ml_eliminate_threshold: v })} /></div></div>}<div className="sm:col-span-2"><span className="text-xs font-semibold">必备资质（与供应商入口勾选项一致）</span><div className="mt-2 flex flex-wrap gap-2">{[...QUALIFICATION_OPTIONS, ...form.required_qualifications.filter(q => !QUALIFICATION_OPTIONS.includes(q))].map(q => { const active = form.required_qualifications.includes(q); return <button type="button" key={q} onClick={() => setForm({ ...form, required_qualifications: active ? form.required_qualifications.filter(v => v !== q) : [...form.required_qualifications, q] })} className={cn("flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-medium transition", active ? "border-[var(--success)]/20 bg-[var(--success-faint)] text-[var(--success)]" : "border-[var(--line)] bg-white text-[var(--muted)] hover:border-[var(--ink)]")}><span className={cn("grid size-4 place-items-center rounded border", active ? "border-[var(--success)] bg-[var(--success)] text-white" : "border-[var(--line)]")}>{active && <Check className="size-3" />}</span>{q}</button>; })}</div></div><div className="sm:col-span-2"><Field label="优先地区（逗号分隔）" value={form.preferred_regions} set={v => setForm({...form,preferred_regions:v})}/></div><label className="sm:col-span-2"><span className="text-xs font-semibold">商品说明</span><Textarea className="mt-2" value={form.description} onChange={e => setForm({...form,description:e.target.value})} /></label></div><Button variant="accent" className="mt-5 w-full" disabled={!canSave} onClick={() => void saveProduct()}><Save className="size-4" />{saving ? "保存中…" : editingId ? "保存修改" : "添加并启用"}</Button></div></div>
-    </div></div>}
-  </div>;
-}
+  const pageCount = Math.max(1, Math.ceil(visibleItems.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const pagedItems = visibleItems.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-function Field({ label, value, set, number = false }: { label: string; value: string; set: (value: string) => void; number?: boolean }) {
-  return <label><span className="text-xs font-semibold">{label}</span><Input className="mt-2" type={number ? "number" : "text"} value={value} onChange={e => set(e.target.value)} /></label>;
-}
+  // 评分分布：用当前口径下的真实评分画直方图，不编造趋势数据。
+  const scoreBuckets = useMemo(() => {
+    const buckets = [
+      { label: "0-59", min: 0, max: 59, count: 0 },
+      { label: "60-69", min: 60, max: 69, count: 0 },
+      { label: "70-79", min: 70, max: 79, count: 0 },
+      { label: "80-89", min: 80, max: 89, count: 0 },
+      { label: "90-100", min: 90, max: 100, count: 0 },
+    ];
+    for (const item of summary.items) {
+      const bucket = buckets.find((b) => item.score >= b.min && item.score <= b.max);
+      if (bucket) bucket.count += 1;
+    }
+    return buckets;
+  }, [summary.items]);
+  const maxBucket = Math.max(1, ...scoreBuckets.map((b) => b.count));
+  const rangeLabel = t.ranges[RANGES.find((r) => r.days === days)?.key ?? "all"];
 
-function ThresholdSlider({ label, value, set }: { label: string; value: string; set: (value: string) => void }) {
-  const pct = Math.round(Number(value || 0) * 100);
-  return <label className="block"><div className="flex items-center justify-between"><span className="text-xs font-semibold">{label}</span><span className="text-xs font-semibold text-[var(--accent)]">{pct}%</span></div><input type="range" min={0} max={100} step={1} value={pct} onChange={e => set(String(Number(e.target.value) / 100))} className="mt-2 w-full accent-[var(--accent)]" /></label>;
+  return (
+    <div className="animate-rise space-y-6">
+      {/* 页头 */}
+      <section className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+        <div>
+          <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-[var(--accent-strong)]">
+            <span className="h-px w-5 bg-[var(--accent)]" />
+            {t.eyebrow}
+          </div>
+          <h1 className="text-[28px] font-bold tracking-tight">{t.title}</h1>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            {t.rangeLabel}<span className="font-semibold text-[var(--ink)]">{rangeLabel}</span>
+            {format(t.rangeNote, { count: summary.range_received })}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <div className="flex rounded-[var(--radius-control)] border border-[var(--line)] bg-[var(--surface)] p-1">
+            {RANGES.map((item) => (
+              <button
+                key={item.days}
+                type="button"
+                onClick={() => setDays(item.days)}
+                className={cn(
+                  "rounded-[var(--radius-chip)] px-2.5 py-1.5 text-xs font-semibold transition",
+                  days === item.days ? "bg-[var(--ink)] text-white" : "text-[var(--muted)] hover:text-[var(--ink)]",
+                )}
+              >
+                {t.ranges[item.key]}
+              </button>
+            ))}
+          </div>
+          <Button variant="outline" onClick={() => void refresh(days)}>
+            <RefreshCw className="size-4" />
+            {t.refresh}
+          </Button>
+          <Button variant="accent" onClick={() => setProductsOpen(true)}>
+            <PackagePlus className="size-4" />
+            {t.manageProducts}
+          </Button>
+        </div>
+      </section>
+
+      {!online && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-control)] border border-[var(--warning)]/20 bg-[var(--warning-faint)] px-4 py-3 text-sm text-[var(--warning)]">
+          <span>{t.offline}</span>
+          <Button size="sm" variant="outline" onClick={() => void refresh(days)}>
+            <RefreshCw className="size-3.5" />
+            {d.common.actions.retry}
+          </Button>
+        </div>
+      )}
+
+      {/* 指标卡 */}
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {metrics.map((item, index) => (
+          <button key={item.key} onClick={() => setMetric(item.key)} className="text-left">
+            <Card className={cn("h-full transition hover:-translate-y-0.5", metric === item.key && "border-[var(--accent)] ring-2 ring-[var(--accent-faint)]")}>
+              <CardContent className="p-5">
+                <item.icon className={cn("size-5", index === 2 ? "text-[var(--success)]" : "text-[var(--accent)]")} />
+                <div className="tnum mt-5 text-3xl font-bold">{item.value}</div>
+                <div className="mt-1 text-sm font-semibold">{item.label}</div>
+                <div className="mt-3 flex items-center justify-between text-xs text-[var(--muted)]">
+                  <span>{item.note}</span>
+                  <ChevronRight className="size-4" />
+                </div>
+              </CardContent>
+            </Card>
+          </button>
+        ))}
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-[1.6fr_1fr]">
+        {/* 明细 */}
+        <Card>
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="font-bold">{format(t.detailTitle, { label: selectedMetric.label })}</h2>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                {format(t.detailSummary, { count: visibleItems.length, sort: t.sorts[sort] })}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex rounded-[var(--radius-control)] border border-[var(--line)] p-0.5">
+                {SORTS.map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => setSort(item)}
+                    className={cn(
+                      "rounded-[var(--radius-chip)] px-2 py-1 text-[11px] font-semibold transition",
+                      sort === item ? "bg-[var(--paper-deep)] text-[var(--ink)]" : "text-[var(--muted)] hover:text-[var(--ink)]",
+                    )}
+                  >
+                    {t.sorts[item]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-2">
+            {metric === "saved" && (
+              <div className="mb-4 rounded-[var(--radius-control)] bg-[var(--paper)] p-4 text-xs leading-5 text-[var(--muted)]">
+                {format(t.savedBasis, { count: summary.items.length })}
+              </div>
+            )}
+
+            {pagedItems.length ? (
+              <>
+                <div className="divide-y divide-[var(--line)]">
+                  {pagedItems.map((item) => (
+                    <div key={item.id} className="grid gap-3 py-4 sm:grid-cols-[1.3fr_1fr_.55fr_.8fr_auto] sm:items-center">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold">{item.supplier}</div>
+                        <div className="truncate text-xs text-[var(--muted)]">{item.product}</div>
+                      </div>
+                      <div className="tnum text-sm">{format(t.row.priceMoq, { price: item.price, moq: item.moq })}</div>
+                      <div className="tnum text-sm font-bold">{format(t.row.score, { score: item.score })}</div>
+                      <div className="flex flex-col gap-1">
+                        <Badge className="w-fit">{statusLabel(item)}</Badge>
+                        <span className="tnum text-[11px] text-[var(--muted)]">
+                          {new Date(item.created_at).toLocaleDateString(localeTag(locale))}
+                        </span>
+                      </div>
+                      <Link
+                        href={`/negotiate?id=${item.id}`}
+                        aria-label={format(t.row.openAria, { supplier: item.supplier })}
+                        className="grid size-8 place-items-center rounded-[var(--radius-chip)] border border-[var(--line)] transition hover:border-[var(--ink)]"
+                      >
+                        <ChevronRight className="size-4" />
+                      </Link>
+                    </div>
+                  ))}
+                </div>
+                {pageCount > 1 && (
+                  <div className="mt-4 flex items-center justify-between text-xs text-[var(--muted)]">
+                    <span className="tnum">{format(t.pagination.page, { page: currentPage, total: pageCount })}</span>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="outline" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>
+                        {t.pagination.previous}
+                      </Button>
+                      <Button size="sm" variant="outline" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>
+                        {t.pagination.next}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="py-10 text-center text-sm text-[var(--muted)]">
+                <p>{t.empty.title}</p>
+                {summary.items.length > 0 && (
+                  <p className="mt-2 text-xs">
+                    {format(t.empty.hint, { count: summary.items.length })}
+                  </p>
+                )}
+                <div className="mt-4 flex flex-wrap justify-center gap-2">
+                  {days !== 0 && (
+                    <Button size="sm" variant="outline" onClick={() => setDays(0)}>{t.empty.switchAll}</Button>
+                  )}
+                  {metric !== "saved" && summary.items.length > 0 && (
+                    <Button size="sm" variant="outline" onClick={() => setMetric("saved")}>{t.empty.viewAll}</Button>
+                  )}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* 评分分布 + 口径说明 */}
+        <div className="space-y-5">
+          <Card>
+            <CardHeader>
+              <h2 className="font-bold">{t.distribution.title}</h2>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                {format(t.distribution.note, { count: summary.items.length })}
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {scoreBuckets.map((bucket) => (
+                <div key={bucket.label}>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="tnum text-[var(--muted)]">{format(t.distribution.bucket, { label: bucket.label })}</span>
+                    <span className="tnum font-semibold">{format(t.distribution.count, { count: bucket.count })}</span>
+                  </div>
+                  <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[var(--paper-deep)]">
+                    <div
+                      className="h-full rounded-full bg-[var(--accent)]"
+                      style={{ width: `${(bucket.count / maxBucket) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+              {!summary.items.length && (
+                <p className="py-6 text-center text-xs text-[var(--muted)]">{t.distribution.empty}</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-1.5">
+                <Info className="size-4 text-[var(--accent)]" />
+                <h2 className="font-bold">{t.basis.title}</h2>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3 text-xs leading-6 text-[var(--muted)]">
+              <p>
+                {t.basis.lead}
+                <span className="font-semibold text-[var(--ink)]">{rangeLabel}</span>
+                {t.basis.tail}
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowCostBasis((v) => !v)}
+                aria-expanded={showCostBasis}
+                className="font-semibold text-[var(--accent-strong)] underline underline-offset-2"
+              >
+                {showCostBasis ? t.basis.hide : t.basis.show}
+              </button>
+              {showCostBasis && (
+                <div className="rounded-[var(--radius-control)] bg-[var(--paper)] p-3 leading-6">
+                  {t.basis.intakeLead}<span className="tnum font-semibold text-[var(--ink)]">{t.basis.intake}</span>
+                  {t.basis.replyLead}<span className="tnum font-semibold text-[var(--ink)]">{t.basis.reply}</span>
+                  {t.basis.beforeCount}{summary.range_received}{t.basis.afterCount}
+                  <span className="tnum font-semibold text-[var(--ink)]">{formatMinutes(summary.minutes_saved, t.duration)}</span>
+                  {t.basis.note}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      {productsOpen && (
+        <ProductLibraryDrawer
+          onClose={() => setProductsOpen(false)}
+          onChanged={() => void refresh(days)}
+        />
+      )}
+    </div>
+  );
 }

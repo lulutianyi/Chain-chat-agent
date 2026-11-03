@@ -1,44 +1,360 @@
 @import "tailwindcss";
 
+/* 设计令牌：颜色、圆角、阴影、字体统一在这里定义。
+   Tailwind v4 的 @theme 会把它们输出成 :root 上的 CSS 变量，
+   同时生成对应工具类（bg-paper / text-muted / rounded-card …）。 */
+@theme {
+  /* —— 表面与文字 —— */
+  --color-paper: #e8edf5;          /* 页面底色（冷调浅蓝灰，非纯白） */
+  --color-paper-deep: #dde3ee;     /* 次级底色（气泡、占位块、进度轨道） */
+  --color-surface: #ffffff;        /* 卡片表面 */
+  --color-ink: #1a1a2e;            /* 主文字 / 深色底 */
+  --color-ink-soft: #2a2a42;
+  /* #6b7280 在 --paper 上只有 4.11:1，达不到 WCAG AA 的 4.5:1，而全站大量
+     次要文字（页脚、说明、时间戳）恰恰落在 paper 底上；改为 #5b6472 后
+     paper 上 5.09:1、surface 上 5.98:1，色相不变，观感几乎无差。 */
+  --color-muted: #5b6472;          /* 次要文字 */
+  --color-line: #e5e7eb;           /* 分隔线 / 描边 */
+
+  /* —— 反色区域（聊天气泡、深色块）—— */
+  --color-surface-inverse: #1a1a2e;
+  --color-on-inverse: #ffffff;
+  --color-on-inverse-muted: rgba(255, 255, 255, .72);
+  --color-on-inverse-faint: rgba(255, 255, 255, .48);
+
+  /* —— 品牌与语义色 —— */
+  /* #3b82f6 与白字对比度约 3.68:1，低于 WCAG AA 的 4.5:1；按品牌规范采用，
+     大字号（数字、badge、按钮）可接受，正文小字请用 --color-accent-strong。 */
+  --color-accent: #3b82f6;
+  --color-accent-strong: #2563eb;
+  /* accent 作为「白字底色」时对比度只有 3.68:1，达不到 AA；
+     悬浮态再深一档，白字 6.3:1，同时给按下反馈留出层次。 */
+  --color-accent-deep: #1d4ed8;
+  --color-accent-faint: #dbeafe;
+  /* success 保留绿色语义（「已通过 / 识别一致 / 已保存」），正向数值与强调走蓝色 accent。 */
+  --color-success: #26715a;
+  --color-success-faint: #dcece5;
+  /* #9c6a17 在 --warning-faint 上只有 3.91:1，达不到 WCAG AA 的 4.5；
+     改为 #8a5d12（faint 上 4.80、paper 上 5.41、surface 上 5.75）。 */
+  --color-warning: #8a5d12;
+  --color-warning-faint: #f4ead3;
+  --color-danger: #b23a31;
+  --color-danger-strong: #9b3028;
+  --color-danger-faint: #f5dedc;
+  --color-ring: #3b82f6;
+
+  /* —— 深色底专用的语义色（浅色版在深底上对比度不足）—— */
+  --color-success-on-dark: #6fd3a8;
+  --color-danger-on-dark: #fca5a5;
+  --color-ai-on-dark: #93c5fd;
+
+  /* —— 其它用途 —— */
+  --color-chat-canvas: #eff3f9;    /* 会话消息区底色 */
+  --color-scrollbar: #cbd5e1;
+
+  /* —— 圆角阶梯：卡片 12 / 控件 8 / 徽章 999 —— */
+  --radius-chip: 0.5rem;
+  --radius-control: 0.5rem;
+  --radius-card: 0.75rem;
+
+  /* —— 阴影阶梯：常态卡片 / 浮层 —— */
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, .06);
+  --shadow-pop: 0 16px 32px -12px rgba(26, 26, 46, .18);
+
+  /* —— 字体：Inter 用于拉丁/数字，中文回退系统字体，避免下载几 MB 的中文字库 —— */
+  --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Hiragino Sans GB", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+}
+
+/* 兼容别名：既有代码大量使用 bg-[var(--paper)] / text-[var(--muted)] 这类写法，
+   保留同名变量以免一次性重写数百处；新代码可直接用 bg-paper / text-muted。
+
+   字号约定（改动界面时请遵守）：
+     text-[28px]      —— 页面主标题（Welcome）
+     text-[15px]      —— 卡片标题（font-weight 600）
+     text-[13px]      —— 正文 / 描述
+     text-[11px]      —— 元信息、标签、辅助
+   现状仍有部分 text-sm(14px) / text-base(16px)，与新阶梯各差 1px，
+   属于可接受的存量；新增界面请按上表取值。
+
+   圆角约定：卡片 12（--radius-card）、控件/输入 8（--radius-control）、
+   徽章 999（rounded-full）；rounded-lg(8) / rounded-xl(12) 与
+   control / card 数值一致，新代码优先用令牌名。 */
 :root {
-  --paper: #f7f8fa;
-  --paper-deep: #eef1f6;
-  --ink: #111827;
-  --ink-soft: #1f2937;
-  --muted: #667085;
-  --line: #e4e7ec;
-  --accent: #1d4ed8;
-  --accent-strong: #1e40af;
-  --accent-faint: #dbeafe;
-  --success: #26715a;
-  --success-faint: #dcece5;
-  --warning: #9c6a17;
-  --warning-faint: #f4ead3;
-  --danger: #b23a31;
-  --danger-faint: #f5dedc;
-  --ring: #1d4ed8;
+  --paper: var(--color-paper);
+  --paper-deep: var(--color-paper-deep);
+  --surface: var(--color-surface);
+  --ink: var(--color-ink);
+  --ink-soft: var(--color-ink-soft);
+  --muted: var(--color-muted);
+  --line: var(--color-line);
+  --surface-inverse: var(--color-surface-inverse);
+  --on-inverse: var(--color-on-inverse);
+  --on-inverse-muted: var(--color-on-inverse-muted);
+  --on-inverse-faint: var(--color-on-inverse-faint);
+  --accent: var(--color-accent);
+  --accent-strong: var(--color-accent-strong);
+  --accent-deep: var(--color-accent-deep);
+  --accent-faint: var(--color-accent-faint);
+  --success: var(--color-success);
+  --success-faint: var(--color-success-faint);
+  --warning: var(--color-warning);
+  --warning-faint: var(--color-warning-faint);
+  --danger: var(--color-danger);
+  --danger-faint: var(--color-danger-faint);
+  --ring: var(--color-ring);
+  --success-on-dark: var(--color-success-on-dark);
+  --danger-on-dark: var(--color-danger-on-dark);
+  --ai-on-dark: var(--color-ai-on-dark);
+  --chat-canvas: var(--color-chat-canvas);
+  --scrollbar: var(--color-scrollbar);
+  --radius-chip: 0.5rem;
+  --radius-control: 0.5rem;
+  --radius-card: 0.75rem;
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, .06);
+  --shadow-pop: 0 16px 32px -12px rgba(26, 26, 46, .18);
 }
 
 * { box-sizing: border-box; }
 html { background: var(--paper); }
 body {
   margin: 0;
-  background: radial-gradient(circle at 95% 0%, rgba(29, 78, 216, .08), transparent 26rem), var(--paper);
+  background: var(--paper);
   color: var(--ink);
-  font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", Arial, sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
 }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 ::selection { background: var(--accent-faint); color: var(--ink); }
 
+/* 金额、分数、统计数字统一用等宽数字，避免逐帧变化时宽度抖动。 */
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* Lucide 线性图标统一 1.5 描边，视觉更轻盈（规范：stroke-width 1.5）。 */
+svg.lucide { stroke-width: 1.5; }
+
+/* ============================================================================
+   动效系统
+   ——
+   气质约束：这个产品是「克制的、确定的、有工程感」的谈判工具，动效只用来
+   交代状态变化（谁进来了、算到第几步、结论是什么），不做表演。因此位移一律
+   ≤ 12px、缩放 ≤ 1.02、时长 ≤ 620ms，只用 ease 系曲线，不用弹跳/旋转/粒子/
+   彩虹渐变——那些会让它看起来像消费级玩具，而不是采购决策台。
+
+   为什么入场隐藏态全部写在 html.motion 之下：
+   默认（JS 没跑起来、或系统开了「减少动态效果」）内容必须**直接可见**，
+   绝不能出现「脚本异常 → 整页 opacity:0 变白板」。所以 layout.tsx 里有一段
+   内联脚本，只在「支持 IntersectionObserver 且系统未要求减少动态」时才给
+   <html> 加 .motion；下面每个隐藏态都有 `.motion` 前缀，静态兜底恒为最终态。
+   ============================================================================ */
+:root {
+  /* 时长阶梯：反馈 140 / 状态 240 / 入场 460 / 滚动入场 620 */
+  --dur-quick: 140ms;
+  --dur-base: 240ms;
+  --dur-enter: 460ms;
+  --dur-reveal: 620ms;
+  /* 缓动：swift 用于入场（起步快、收尾稳），glide 用于状态切换 */
+  --ease-swift: cubic-bezier(.16, .84, .28, 1);
+  --ease-glide: cubic-bezier(.4, 0, .2, 1);
+  /* 入场位移：12px 是「看得出在动、又不显得飘」的经验值 */
+  --rise-shift: 12px;
+  --shadow-hover: 0 8px 20px -8px rgba(26, 26, 46, .16);
+}
+
 @keyframes rise {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(var(--rise-shift)); }
   to { opacity: 1; transform: translateY(0); }
 }
-.animate-rise { animation: rise .45s ease-out backwards; }
-.dot-grid {
-  background-image: radial-gradient(rgba(17, 24, 39, .12) .65px, transparent .65px);
-  background-size: 10px 10px;
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(var(--rise-shift)); }
+  to { opacity: 1; transform: translateX(0); }
+}
+/* 浮层（弹窗 / 轻提示）入场：比页面入场更快、位移更小。
+   弹窗慢慢飘出来会显得拖沓，8px + 240ms 刚好「出现」而不是「表演」。 */
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(8px) scale(.995); }
+  to { opacity: 1; transform: none; }
+}
+/* 装饰性底纹：48px 网格在 24s 内平移一格，肉眼几乎察觉不到，但页面「活着」 */
+@keyframes grid-pan {
+  from { background-position: 0 0; }
+  to { background-position: 48px 48px; }
+}
+
+.animate-rise { animation: rise var(--dur-enter) var(--ease-swift) backwards; }
+
+/* —— 入场动效工具类（供非滚动场景：首屏、认证页分栏、弹层内容）—— */
+.anim-rise { animation: rise var(--dur-enter) var(--ease-swift) both; }
+.anim-fade { animation: fade-in var(--dur-enter) var(--ease-glide) both; }
+.anim-slide-right { animation: slide-in-right var(--dur-enter) var(--ease-swift) both; }
+.anim-pop { animation: pop-in var(--dur-base) var(--ease-swift) both; }
+/* 排队延迟：同组元素依次入场，每档 60ms，最多 8 档（480ms 之后再晚就该直接出现） */
+.anim-d1 { animation-delay: 60ms; }
+.anim-d2 { animation-delay: 120ms; }
+.anim-d3 { animation-delay: 180ms; }
+.anim-d4 { animation-delay: 240ms; }
+.anim-d5 { animation-delay: 300ms; }
+.anim-d6 { animation-delay: 360ms; }
+.anim-d7 { animation-delay: 420ms; }
+.anim-d8 { animation-delay: 480ms; }
+
+/* —— 滚动入场：由 <Reveal> 组件在进入视口时加 .is-in —— */
+.motion .reveal { opacity: 0; }
+.motion .reveal.is-in { animation: rise var(--dur-reveal) var(--ease-swift) both; }
+
+/* —— 悬浮反馈：抬起 2px + 阴影加深，沿用「界面是一张纸」的隐喻，不放大不变形 —— */
+.lift {
+  transition: transform var(--dur-quick) var(--ease-glide),
+              box-shadow var(--dur-quick) var(--ease-glide),
+              border-color var(--dur-quick) var(--ease-glide);
+}
+@media (hover: hover) {
+  .lift:hover { transform: translateY(-2px); box-shadow: var(--shadow-hover); }
+}
+/* 键盘用户同样要能看到「这里可交互」——hover 反馈不能只给鼠标。
+   用 :has(:focus-visible) 而不是 :focus-within：后者连鼠标点进去也会命中，
+   结果卡片被永久挂上悬浮阴影，正好和这条规则的意图相反。 */
+.lift:has(:focus-visible) { box-shadow: var(--shadow-hover); }
+
+/* —— 装饰性底纹（首页影片舞台 / 认证页品牌区）——
+   只用一层 48px 网格在 24s 内平移一格：这是「仪器面板」的氛围，不是发光特效。
+   刻意不做彩色光斑与大面积高斯模糊——本站的阴影承担的是层级语义（卡片 / 浮层），
+   一旦用来发氛围就会滑向玻璃拟态，和「规则写在明面上」的气质相反。 */
+.ambient-grid {
+  background-image:
+    linear-gradient(to right, rgba(26, 26, 46, .06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(26, 26, 46, .06) 1px, transparent 1px);
+  background-size: 48px 48px;
+  animation: grid-pan 24s linear infinite;
+}
+
+/* 尊重系统的「减少动态效果」设置：对前庭功能敏感的用户，入场动画会引发不适。
+   pulse 骨架屏同理——纯装饰性动画应当直接关掉。
+   注意这里只是第二道保险：入场的隐藏态本身已由 html.motion 兜住，
+   即使这段规则失效也不会把内容锁在 opacity:0。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-rise { animation: none; }
+  /* 无限装饰动画直接关掉：上面的 .001ms + iteration-count:1 会让它们定格在
+     起始帧（网格停在半格、加载圈停成一只静止的斜圈），比不动更奇怪。 */
+  .ambient-grid { animation: none !important; }
+}
+
+/* ============================================================================
+   首页产品影片
+   ——
+   默认只播视频；系统开启「减少动态效果」时换成同一时刻的静态图。
+   为什么用 CSS 而不是 JS 判断：视频元素本身是声明式自动播放的，无 JS 也能跑；
+   如果降级逻辑写在 JS 里，无 JS 用户就永远拿不到静态替代。两层内容同尺寸叠放，
+   切换时不会引起布局跳动。
+   ============================================================================ */
+.film-still { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .film-video { display: none; }
+  .film-still { display: block; }
+  /* 视频都藏起来了，播放/暂停按钮就成了「按了没反应、也没东西可控制」的僵尸控件 */
+  .film-toggle { display: none; }
+}
+
+/* 影片录制模式（只在 /demo-stage 由脚本挂到 <html> 上，线上页面不受影响）：
+   逐帧截图要求「同一个 t 永远渲染出同一帧」，任何 CSS 动画/过渡都会破坏这一点。 */
+.capture *, .capture *::before, .capture *::after {
+  animation: none !important;
+  transition: none !important;
+}
+/* 顺带盖住 Next 的开发浮标（dev 模式下它默认挂在左下角，会被一起录进视频） */
+.capture nextjs-portal,
+.capture [data-nextjs-toast],
+.capture [data-nextjs-dev-tools-button] {
+  display: none !important;
+}
+
+/* ============================================================================
+   语言切换的转接页
+   ——
+   切换语言要重新渲染服务端内容，这段时间页面不能「什么都不发生」。
+   遮罩用页面底色（--paper）+ 一层网格，和认证页的品牌区同一套语言：
+   它读起来是「页面正在重新装订」，而不是一个弹窗广告。
+   ============================================================================ */
+@keyframes lang-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+/* 不确定进度条：一根 40% 宽的高亮条在轨道里匀速扫过，表示「在跑」而非「跑到哪了」。
+   刻意不显示百分比——服务端渲染没有可用的进度，编一个数字比不显示更糟。 */
+@keyframes lang-sweep {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(250%); }
+}
+
+.lang-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  /* color-mix 让遮罩直接取页面底色，改主题时不会漏掉这里；
+     下一行是给不支持 color-mix 的浏览器的实色兜底。 */
+  background: var(--paper);
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter: blur(6px);
+  animation: lang-fade var(--dur-base) var(--ease-glide) both;
+}
+.lang-overlay-card {
+  position: relative;
+  width: 100%;
+  max-width: 24rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding: 1.5rem;
+  box-shadow: var(--shadow-pop);
+}
+.lang-overlay-bar {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  /* 轨道本身用淡品牌色而不是灰色：扫描条在循环里有一段完全移出轨道，
+     轨道若是空的，那一瞬间整条进度看起来像没在跑。 */
+  background: var(--accent-faint);
+}
+.lang-overlay-bar span {
+  display: block;
+  height: 100%;
+  width: 40%;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: lang-sweep 1.15s var(--ease-glide) infinite;
+}
+/* 系统要求「减少动态效果」时：进度条不扫动，但也不能消失——静止的一小段高亮
+   仍然在表达「这里是进度」，比一条空轨道清楚。 */
+@media (prefers-reduced-motion: reduce) {
+  .lang-overlay-bar span { animation: none !important; }
+}
+
+/* 键盘焦点：全站统一。基础组件自带 ring，但页面里还有大量手写 <button>／链接，
+   它们此前完全没有焦点样式，键盘用户看不到自己在哪。用 :focus-visible
+   只在键盘导航时出现，不影响鼠标点击的观感。
+   注意这里**不能**写 border-radius：那条声明改的是元素自身的圆角，会让所有
+   获得焦点的卡片/胶囊在键盘导航时突然从 12px / 999px 变成 8px。 */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+/* 仅供屏幕阅读器的文本 */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
 .thin-scrollbar::-webkit-scrollbar { width: 5px; }
-.thin-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+.thin-scrollbar::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 999px; }

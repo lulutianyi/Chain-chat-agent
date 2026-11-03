@@ -18,6 +18,10 @@ class DecisionEngineTests(unittest.TestCase):
         )
         self.assertFalse(result.passed)
         self.assertEqual(len(result.reasons), 2)
+        self.assertEqual(
+            [item["code"] for item in result.reason_codes],
+            ["moq_above_max", "missing_qualifications"],
+        )
 
     def test_high_quality_supplier_requires_manual_handoff(self):
         score = calculate_supplier_score(
@@ -43,6 +47,8 @@ class DecisionEngineTests(unittest.TestCase):
         )
         self.assertFalse(result.passed)
         self.assertIn("低于最低要求", result.reasons[0])
+        self.assertEqual(result.reason_codes[0]["code"], "payment_below_min")
+        self.assertEqual(result.reason_codes[0]["payment_days"], 15)
 
     def test_hard_failure_always_beats_a_high_score(self):
         classification, action = classify_supplier(hard_pass=False, score=100, handoff_score=82)
